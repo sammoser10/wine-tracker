@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useWineData, useCurrentUser, addEntry, deleteEntry, addBottle, decrementBottle, toggleReaction, addComment as postComment } from './data'
+import { useWineData, useAuth, addEntry, deleteEntry, addBottle, decrementBottle, toggleReaction, addComment as postComment } from './data'
 
 const TYPES = [
   { label: "Red", color: "#C0392B", bg: "#C0392B15", emoji: "🍷" },
@@ -81,7 +81,7 @@ const pBtn = { width:40, height:40, borderRadius:14, border:"none", fontSize:17,
 const sBtn = { background:"none", border:"none", cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", padding:"4px 8px", borderRadius:8, fontFamily:"'Nunito'" }
 
 export default function App() {
-  const { user, createUser } = useCurrentUser()
+  const { user, profile, authLoading, signUp, signIn, signOut } = useAuth()
   const { users, entries, collection, reactions, comments, loading } = useWineData()
 
   const [tab, setTab] = useState("feed")
@@ -106,14 +106,33 @@ export default function App() {
   const [pF, setPF] = useState({name:"",type:"Red",producer:"",region:"",price:"",quantity:"1",store:"",vintage:"",date:""})
   const [oNotes, setONotes] = useState("")
   const [oRating, setORating] = useState(0)
-  const [sName, setSName] = useState("")
-  const [sAv, setSAv] = useState("🍷")
+
+  // Auth form state
+  const [authMode, setAuthMode] = useState("signin")
+  const [authEmail, setAuthEmail] = useState("")
+  const [authPass, setAuthPass] = useState("")
+  const [authName, setAuthName] = useState("")
+  const [authAvatar, setAuthAvatar] = useState("🍷")
+  const [authErr, setAuthErr] = useState("")
+  const [authBusy, setAuthBusy] = useState(false)
 
   const yr = curDate.getFullYear()
   const mo = curDate.getMonth()
   const now = new Date()
 
-  const doSetup = async () => { if(!sName.trim()) return; await createUser(sName.trim(), sAv) }
+  const doAuth = async () => {
+    if(authBusy) return
+    setAuthErr("")
+    if(!authEmail.trim()||!authPass.trim()) { setAuthErr("Email and password required"); return }
+    if(authMode==="signup"&&!authName.trim()) { setAuthErr("Name required"); return }
+    if(authPass.length<6) { setAuthErr("Password must be at least 6 characters"); return }
+    setAuthBusy(true)
+    const result = authMode==="signup"
+      ? await signUp(authEmail.trim(), authPass, authName.trim(), authAvatar)
+      : await signIn(authEmail.trim(), authPass)
+    if(result.error) setAuthErr(result.error)
+    setAuthBusy(false)
+  }
 
   // Calendar
   const fDay = new Date(yr,mo,1).getDay()
@@ -130,29 +149,27 @@ export default function App() {
     setter(f=>({...f,name:result.name||f.name,producer:result.producer||f.producer,region:[result.region,result.country].filter(Boolean).join(", ")||f.region,type:TYPES.find(t=>t.label===result.type)?result.type:f.type,grape:result.grape||f.grape,vintage:result.vintage||f.vintage}))
   }
 
+  const uid = profile?.id
+
   const subDrink = async () => {
-    if(!dF.name.trim()||!user) return
+    if(!dF.name.trim()||!uid) return
     const d = dF.date||(selDay?ds(selDay):ti())
-    const entry = {id:mid(),...dF,date:d,kind:"drink",userId:user.id,createdAt:new Date().toISOString()}
-    await addEntry(entry)
+    await addEntry({id:mid(),...dF,date:d,kind:"drink",userId:uid,createdAt:new Date().toISOString()})
     setDF({name:"",type:"Red",producer:"",region:"",grape:"",vintage:"",notes:"",rating:0,date:""}); setShowDrink(false)
   }
 
   const subBuy = async () => {
-    if(!pF.name.trim()||!user) return
+    if(!pF.name.trim()||!uid) return
     const d=pF.date||ti(); const qty=parseInt(pF.quantity)||1; const price=pF.price?parseFloat(pF.price):null
-    const entry = {id:mid(),...pF,date:d,kind:"purchase",userId:user.id,price,quantity:qty,createdAt:new Date().toISOString()}
-    await addEntry(entry)
-    const bottle = {id:mid(),name:pF.name,producer:pF.producer,type:pF.type,vintage:pF.vintage,region:pF.region||"",price,store:pF.store,remaining:qty,total:qty,userId:user.id,addedAt:new Date().toISOString()}
-    await addBottle(bottle)
+    await addEntry({id:mid(),...pF,date:d,kind:"purchase",userId:uid,price,quantity:qty,createdAt:new Date().toISOString()})
+    await addBottle({id:mid(),name:pF.name,producer:pF.producer,type:pF.type,vintage:pF.vintage,region:pF.region||"",price,store:pF.store,remaining:qty,total:qty,userId:uid,addedAt:new Date().toISOString()})
     setPF({name:"",type:"Red",producer:"",region:"",price:"",quantity:"1",store:"",vintage:"",date:""}); setShowBuy(false)
   }
 
   const doOpenBottle = async () => {
-    if(!showOpen||!user) return
+    if(!showOpen||!uid) return
     const b = showOpen
-    const drinkEntry = {id:mid(),name:b.name,producer:b.producer,type:b.type,vintage:b.vintage,region:b.region,grape:"",notes:oNotes,rating:oRating,date:ti(),kind:"drink",userId:user.id,createdAt:new Date().toISOString(),fromCollection:b.id}
-    await addEntry(drinkEntry)
+    await addEntry({id:mid(),name:b.name,producer:b.producer,type:b.type,vintage:b.vintage,region:b.region,grape:"",notes:oNotes,rating:oRating,date:ti(),kind:"drink",userId:uid,createdAt:new Date().toISOString(),fromCollection:b.id})
     await decrementBottle(b.id)
     setShowOpen(null); setONotes(""); setORating(0)
   }
@@ -188,48 +205,81 @@ export default function App() {
     catch { setAiErr("Couldn't parse text") } setProc(false)
   }
   const doImport = async () => {
-    if(!user) return; const d=ti(); const sel=parsed.filter(i=>i.selected)
+    if(!uid) return; const d=ti(); const sel=parsed.filter(i=>i.selected)
     for(const it of sel) {
-      const eid=mid(); const bid=mid()
-      await addEntry({id:eid,name:it.name||"?",producer:it.producer||"",type:TYPES.find(t=>t.label===it.type)?it.type:"Red",price:it.price||null,quantity:it.quantity||1,store:it.store||"",vintage:it.vintage||"",region:"",grape:"",notes:"",rating:0,date:d,kind:"purchase",userId:user.id,createdAt:new Date().toISOString()})
-      await addBottle({id:bid,name:it.name||"?",producer:it.producer||"",type:TYPES.find(t=>t.label===it.type)?it.type:"Red",vintage:it.vintage||"",region:"",price:it.price||null,store:it.store||"",remaining:it.quantity||1,total:it.quantity||1,userId:user.id,addedAt:new Date().toISOString()})
+      await addEntry({id:mid(),name:it.name||"?",producer:it.producer||"",type:TYPES.find(t=>t.label===it.type)?it.type:"Red",price:it.price||null,quantity:it.quantity||1,store:it.store||"",vintage:it.vintage||"",region:"",grape:"",notes:"",rating:0,date:d,kind:"purchase",userId:uid,createdAt:new Date().toISOString()})
+      await addBottle({id:mid(),name:it.name||"?",producer:it.producer||"",type:TYPES.find(t=>t.label===it.type)?it.type:"Red",vintage:it.vintage||"",region:"",price:it.price||null,store:it.store||"",remaining:it.quantity||1,total:it.quantity||1,userId:uid,addedAt:new Date().toISOString()})
     }
     setParsed([]); setShowImport(false); setBulkText(""); setPastImg(null)
   }
 
-  const doDelete = async id => { await deleteEntry(id); setShowDetail(null) }
-  const doToggleLike = id => { if(user) toggleReaction(id, user.id) }
+  const doDelete = async id => {
+    if(confirm("Delete this entry?")) {
+      await deleteEntry(id)
+      setShowDetail(null)
+    }
+  }
+  const doToggleLike = id => { if(uid) toggleReaction(id, uid) }
   const doAddCmt = id => {
-    if(!user||!(cmtText[id]||"").trim()) return
-    postComment(id, user.id, cmtText[id].trim())
+    if(!uid||!(cmtText[id]||"").trim()) return
+    postComment(id, uid, cmtText[id].trim())
     setCmtText(p=>({...p,[id]:""}))
   }
 
   const gL = id => reactions[id]||[]
   const gCm = id => comments[id]||[]
-  const feed = [...entries].filter(e=>feedF==="all"||(feedF==="drinks"&&e.kind==="drink")||(feedF==="purchases"&&e.kind==="purchase")||(feedF==="mine"&&e.userId===(user&&user.id))).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))
-  const myColl = collection.filter(b=>b.userId===(user&&user.id))
+  const feed = [...entries].filter(e=>feedF==="all"||(feedF==="drinks"&&e.kind==="drink")||(feedF==="purchases"&&e.kind==="purchase")||(feedF==="mine"&&e.userId===uid)).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))
+  const myColl = collection.filter(b=>b.userId===uid)
   const myActive = myColl.filter(b=>b.remaining>0)
   const myEmpty = myColl.filter(b=>b.remaining<=0)
 
-  // ═══ RENDER ═══
-  if(loading) return <div style={{minHeight:"100vh",background:"#FAFAF8",display:"flex",alignItems:"center",justifyContent:"center"}}><p style={{color:"#A09890",fontFamily:"'Nunito'",fontSize:16,fontWeight:700}}>Loading...</p></div>
+  // ═══ LOADING ═══
+  if(authLoading||loading) return <div style={{minHeight:"100vh",background:"#FAFAF8",display:"flex",alignItems:"center",justifyContent:"center"}}><p style={{color:"#A09890",fontFamily:"'Nunito'",fontSize:16,fontWeight:700}}>Loading...</p></div>
 
-  if(!user) return (
+  // ═══ AUTH SCREEN ═══
+  if(!user||!profile) return (
     <div style={{minHeight:"100vh",background:"#FAFAF8",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32}}>
       <div style={{fontSize:48,marginBottom:12}}>🍷</div>
       <h1 style={{fontFamily:"'Nunito'",fontSize:32,fontWeight:900,color:"#2D2420",margin:"0 0 4px"}}>Wine Tracker</h1>
-      <p style={{fontFamily:"'Nunito'",fontSize:13,color:"#A09890",fontWeight:600,margin:"0 0 36px",letterSpacing:1}}>TRACK &middot; SHARE &middot; SIP</p>
-      <div style={{width:"100%",maxWidth:300}}>
-        <input value={sName} onChange={e=>setSName(e.target.value)} placeholder="Your name" onKeyDown={e=>e.key==="Enter"&&doSetup()} autoFocus style={{width:"100%",marginBottom:16,fontSize:17,padding:"14px 18px",borderRadius:16,background:"#F5F0EB",border:"2px solid transparent",fontWeight:700,textAlign:"center",outline:"none",fontFamily:"'Nunito'",color:"#2D2420"}} />
-        <div style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center",marginBottom:24}}>
-          {AVATARS.map(a=>(<button key={a} onClick={()=>setSAv(a)} style={{width:42,height:42,borderRadius:14,border:sAv===a?"3px solid #C0392B":"2px solid #F5F0EB",background:sAv===a?"#C0392B10":"#FFF",fontSize:20,cursor:"pointer"}}>{a}</button>))}
+      <p style={{fontFamily:"'Nunito'",fontSize:13,color:"#A09890",fontWeight:600,margin:"0 0 24px",letterSpacing:1}}>TRACK &middot; SHARE &middot; SIP</p>
+
+      <div style={{width:"100%",maxWidth:320}}>
+        <Tabs tabs={[{key:"signin",label:"Sign In"},{key:"signup",label:"Sign Up"}]} active={authMode} onChange={setAuthMode} />
+
+        <div style={{marginTop:16,display:"flex",flexDirection:"column",gap:10}}>
+          <div>
+            <label style={fl}>Email</label>
+            <input value={authEmail} onChange={e=>setAuthEmail(e.target.value)} placeholder="you@email.com" type="email" style={fi} />
+          </div>
+          <div>
+            <label style={fl}>Password</label>
+            <input value={authPass} onChange={e=>setAuthPass(e.target.value)} placeholder="Min 6 characters" type="password" onKeyDown={e=>e.key==="Enter"&&authMode==="signin"&&doAuth()} style={fi} />
+          </div>
+
+          {authMode==="signup" && <>
+            <div>
+              <label style={fl}>Display Name</label>
+              <input value={authName} onChange={e=>setAuthName(e.target.value)} placeholder="Your name" onKeyDown={e=>e.key==="Enter"&&doAuth()} style={fi} />
+            </div>
+            <div>
+              <label style={fl}>Avatar</label>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                {AVATARS.map(a=>(<button key={a} onClick={()=>setAuthAvatar(a)} style={{width:38,height:38,borderRadius:12,border:authAvatar===a?"3px solid #C0392B":"2px solid #F5F0EB",background:authAvatar===a?"#C0392B10":"#FFF",fontSize:18,cursor:"pointer"}}>{a}</button>))}
+              </div>
+            </div>
+          </>}
+
+          {authErr&&<p style={{color:"#E74C3C",fontSize:12,fontFamily:"'Nunito'",fontWeight:600,margin:0,textAlign:"center"}}>{authErr}</p>}
+
+          <button onClick={doAuth} disabled={authBusy} style={{...bBtn,background:authBusy?"#F5F0EB":"linear-gradient(135deg,#C0392B,#E74C3C)",color:authBusy?"#C8C0B8":"#FFF",boxShadow:authBusy?"none":"0 4px 20px rgba(192,57,43,0.3)",marginTop:4}}>
+            {authBusy ? "..." : authMode==="signin" ? "Sign In" : "Create Account"} 🚀
+          </button>
         </div>
-        <button onClick={doSetup} disabled={!sName.trim()} style={{...bBtn,background:sName.trim()?"linear-gradient(135deg,#C0392B,#E74C3C)":"#F5F0EB",color:sName.trim()?"#FFF":"#C8C0B8",boxShadow:sName.trim()?"0 4px 20px rgba(192,57,43,0.3)":"none"}}>Let's Go 🚀</button>
       </div>
     </div>
   )
 
+  // ═══ MAIN APP ═══
   return (
     <div style={{minHeight:"100vh",background:"#FAFAF8",color:"#2D2420",fontFamily:"'Nunito',sans-serif",maxWidth:520,margin:"0 auto"}}>
 
@@ -237,16 +287,17 @@ export default function App() {
       <div style={{padding:"16px 16px 12px",background:"#FFF",position:"sticky",top:0,zIndex:100,borderBottom:"1px solid #F5F0EB"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <Av user={user} sz={34} showName={false} />
+            <Av user={profile} sz={34} showName={false} />
             <div>
               <h1 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:0}}>Wine Tracker 🍷</h1>
-              <p style={{fontFamily:"'Nunito'",fontSize:10,color:"#B8B0A8",fontWeight:700,margin:0,letterSpacing:1}}>{Object.keys(users).length} MEMBERS</p>
+              <p style={{fontFamily:"'Nunito'",fontSize:10,color:"#B8B0A8",fontWeight:700,margin:0,letterSpacing:1}}>{profile.name} &middot; {Object.keys(users).length} MEMBERS</p>
             </div>
           </div>
           <div style={{display:"flex",gap:6}}>
             <button onClick={()=>{setShowDrink(true);setAiErr("")}} style={{...pBtn,background:"linear-gradient(135deg,#C0392B,#E74C3C)"}}>🍷</button>
             <button onClick={()=>{setShowBuy(true);setAiErr("")}} style={{...pBtn,background:"linear-gradient(135deg,#D4AC0D,#F1C40F)"}}>🛒</button>
             <button onClick={()=>{setShowImport(true);setAiErr("");setParsed([]);setBulkText("");setPastImg(null)}} style={{...pBtn,background:"linear-gradient(135deg,#7D3C98,#9B59B6)"}}>📸</button>
+            <button onClick={signOut} style={{...pBtn,background:"#F5F0EB",color:"#A09890",boxShadow:"none",fontSize:13}}>↩</button>
           </div>
         </div>
       </div>
@@ -269,12 +320,15 @@ export default function App() {
         <div style={{marginTop:12}}>
           {feed.length===0&&<div style={{textAlign:"center",padding:"48px 20px"}}><p style={{fontFamily:"'Nunito'",fontSize:16,color:"#C8C0B8",fontWeight:700}}>No activity yet ✨</p></div>}
           {feed.map(entry=>{
-            const eu=users[entry.userId]; const likes=gL(entry.id); const cmts=gCm(entry.id); const liked=user&&likes.includes(user.id); const exp=expCmts[entry.id]; const isDrink=entry.kind==="drink"; const ts=gt(entry.type)
+            const eu=users[entry.userId]; const likes=gL(entry.id); const cmts=gCm(entry.id); const liked=uid&&likes.includes(uid); const exp=expCmts[entry.id]; const isDrink=entry.kind==="drink"; const ts=gt(entry.type); const own=entry.userId===uid
             return <div key={entry.id} style={{background:"#FFF",borderRadius:20,marginBottom:10,boxShadow:"0 2px 12px rgba(0,0,0,0.04)",overflow:"hidden",border:"1px solid #F5F0EB",borderLeft:isDrink?"4px solid #C0392B":"4px solid #D4AC0D"}}>
               <div style={{padding:"14px 16px 10px"}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}><Av user={eu} sz={30} /><span style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600}}>{fmtDT(entry.createdAt)}</span><span style={{fontSize:9,fontFamily:"'Nunito'",fontWeight:800,padding:"3px 8px",borderRadius:10,background:isDrink?"#C0392B12":"#D4AC0D12",color:isDrink?"#C0392B":"#D4AC0D"}}>{isDrink?"DRANK":"BOUGHT"}</span></div>
-                  <span style={{fontSize:10,color:ts.color,fontFamily:"'Nunito'",fontWeight:800,background:ts.bg,padding:"4px 10px",borderRadius:20}}>{ts.emoji} {entry.type}</span>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{fontSize:10,color:ts.color,fontFamily:"'Nunito'",fontWeight:800,background:ts.bg,padding:"4px 10px",borderRadius:20}}>{ts.emoji} {entry.type}</span>
+                    {own&&<button onClick={()=>doDelete(entry.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#D5D0CB",padding:"2px 4px",borderRadius:6,lineHeight:1}} title="Delete">✕</button>}
+                  </div>
                 </div>
                 <p style={{margin:"0 0 2px",fontSize:18,fontFamily:"'Nunito'",fontWeight:900,color:"#2D2420"}}>{entry.name}{entry.vintage?<span style={{color:"#B8B0A8",fontWeight:600}}>{" '"+entry.vintage.slice(-2)}</span>:""}</p>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
@@ -357,7 +411,7 @@ export default function App() {
       {tab==="stats" && <div style={{padding:"12px 16px"}}>
         <Tabs tabs={[{key:"week",label:"Week"},{key:"month",label:"Month"},{key:"year",label:"Year"},{key:"all",label:"All"}]} active={statsR} onChange={setStatsR} />
         {(()=>{
-          const myE=entries.filter(e=>e.userId===(user&&user.id)); const nd=new Date()
+          const myE=entries.filter(e=>e.userId===uid); const nd=new Date()
           let filt=myE.filter(e=>e.kind==="purchase")
           if(statsR==="week"){const w=new Date(nd);w.setDate(w.getDate()-7);filt=filt.filter(p=>new Date(p.date+"T12:00:00")>=w)}
           else if(statsR==="month") filt=filt.filter(p=>{const d=new Date(p.date+"T12:00:00");return d.getMonth()===nd.getMonth()&&d.getFullYear()===nd.getFullYear()})
@@ -457,7 +511,7 @@ export default function App() {
 
       <Modal open={!!showDetail} onClose={()=>setShowDetail(null)}>
         {showDetail&&(()=>{
-          const eu=users[showDetail.userId]; const isDrink=showDetail.kind==="drink"; const own=showDetail.userId===(user&&user.id)
+          const eu=users[showDetail.userId]; const isDrink=showDetail.kind==="drink"; const own=showDetail.userId===uid
           return <div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}><Av user={eu} sz={26} /><span style={{fontSize:11,color:gt(showDetail.type).color,fontFamily:"'Nunito'",fontWeight:800,background:gt(showDetail.type).bg,padding:"4px 10px",borderRadius:20}}>{gt(showDetail.type).emoji} {showDetail.type}</span></div>
             <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"4px 0"}}>{showDetail.name}</h3>
