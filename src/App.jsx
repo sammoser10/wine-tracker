@@ -106,6 +106,7 @@ export default function App() {
   const [pF, setPF] = useState({name:"",type:"Red",producer:"",region:"",price:"",quantity:"1",store:"",vintage:"",date:""})
   const [oNotes, setONotes] = useState("")
   const [oRating, setORating] = useState(0)
+  const [oQty, setOQty] = useState(1)
   const [lbMode, setLbMode] = useState("drinks")
 
   // Auth form state
@@ -171,9 +172,10 @@ export default function App() {
   const doOpenBottle = async () => {
     if(!showOpen||!uid) return
     const b = showOpen
-    await addEntry({id:mid(),name:b.name,producer:b.producer,type:b.type,vintage:b.vintage,region:b.region,grape:"",notes:oNotes,rating:oRating,date:ti(),kind:"drink",userId:uid,price:b.price,createdAt:new Date().toISOString(),fromCollection:b.id})
-    await decrementBottle(b.id)
-    setShowOpen(null); setONotes(""); setORating(0)
+    const qty = oQty || 1
+    await addEntry({id:mid(),name:b.name,producer:b.producer,type:b.type,vintage:b.vintage,region:b.region,grape:"",notes:oNotes,rating:oRating,date:ti(),kind:"drink",userId:uid,price:b.price!=null?(b.price*qty):null,quantity:qty,createdAt:new Date().toISOString(),fromCollection:b.id})
+    for(let i=0;i<qty;i++) await decrementBottle(b.id)
+    setShowOpen(null); setONotes(""); setORating(0); setOQty(1)
   }
 
   const handlePaste = async (e) => {
@@ -207,21 +209,62 @@ export default function App() {
     } catch { setAiErr("Failed to process image") }
   }
 
+  const enrichWithAI = async (items) => {
+    const enriched = []
+    for(const it of items) {
+      try {
+        const ai = await aiWine(it.name + (it.producer ? " " + it.producer : "") + (it.vintage ? " " + it.vintage : ""))
+        const qty = it.quantity || 1
+        const unitPrice = it.price != null && qty > 1 ? Math.round((it.price / qty) * 100) / 100 : it.price || null
+        enriched.push({
+          ...it,
+          name: ai.name || it.name,
+          producer: ai.producer || it.producer || "",
+          region: [ai.region, ai.country].filter(Boolean).join(", ") || "",
+          type: TYPES.find(t => t.label === ai.type) ? ai.type : (it.type || "Red"),
+          grape: ai.grape || "",
+          vintage: ai.vintage || it.vintage || "",
+          price: unitPrice,
+          totalPrice: it.price || null,
+          quantity: qty,
+          selected: true,
+        })
+      } catch {
+        const qty = it.quantity || 1
+        const unitPrice = it.price != null && qty > 1 ? Math.round((it.price / qty) * 100) / 100 : it.price || null
+        enriched.push({ ...it, price: unitPrice, totalPrice: it.price || null, quantity: qty, region: "", grape: "", selected: true })
+      }
+    }
+    return enriched
+  }
+
   const parseImg = async () => {
     if(!pastImg||proc) return; setProc(true); setParsed([]); setAiErr("")
-    try { const items=await aiReceipt(pastImg.base64,pastImg.mediaType); if(!Array.isArray(items)||!items.length) setAiErr("No wines found"); else setParsed(items.map(it=>({...it,selected:true}))) }
-    catch(e) { setAiErr("Error: "+(e.message||"Unknown")) } setProc(false)
+    try {
+      const items = await aiReceipt(pastImg.base64, pastImg.mediaType)
+      if(!Array.isArray(items)||!items.length) { setAiErr("No wines found"); setProc(false); return }
+      const enriched = await enrichWithAI(items)
+      setParsed(enriched)
+    } catch(e) { setAiErr("Error: "+(e.message||"Unknown")) }
+    setProc(false)
   }
   const parseTxt = async () => {
     if(!bulkText.trim()||proc) return; setProc(true); setParsed([]); setAiErr("")
-    try { const items=await aiBulk(bulkText); setParsed(Array.isArray(items)?items.map(it=>({...it,selected:true})):[]); }
-    catch { setAiErr("Couldn't parse text") } setProc(false)
+    try {
+      const items = await aiBulk(bulkText)
+      if(!Array.isArray(items)||!items.length) { setAiErr("No wines found"); setProc(false); return }
+      const enriched = await enrichWithAI(items)
+      setParsed(enriched)
+    } catch { setAiErr("Couldn't parse text") }
+    setProc(false)
   }
   const doImport = async () => {
     if(!uid) return; const d=ti(); const sel=parsed.filter(i=>i.selected)
     for(const it of sel) {
-      await addEntry({id:mid(),name:it.name||"?",producer:it.producer||"",type:TYPES.find(t=>t.label===it.type)?it.type:"Red",price:it.price||null,quantity:it.quantity||1,store:it.store||"",vintage:it.vintage||"",region:"",grape:"",notes:"",rating:0,date:d,kind:"purchase",userId:uid,createdAt:new Date().toISOString()})
-      await addBottle({id:mid(),name:it.name||"?",producer:it.producer||"",type:TYPES.find(t=>t.label===it.type)?it.type:"Red",vintage:it.vintage||"",region:"",price:it.price||null,store:it.store||"",remaining:it.quantity||1,total:it.quantity||1,userId:uid,addedAt:new Date().toISOString()})
+      const qty = it.quantity || 1
+      const unitPrice = it.price
+      await addEntry({id:mid(),name:it.name||"?",producer:it.producer||"",type:TYPES.find(t=>t.label===it.type)?it.type:"Red",price:unitPrice,quantity:qty,store:it.store||"",vintage:it.vintage||"",region:it.region||"",grape:it.grape||"",notes:"",rating:0,date:d,kind:"purchase",userId:uid,createdAt:new Date().toISOString()})
+      await addBottle({id:mid(),name:it.name||"?",producer:it.producer||"",type:TYPES.find(t=>t.label===it.type)?it.type:"Red",vintage:it.vintage||"",region:it.region||"",price:unitPrice,store:it.store||"",remaining:qty,total:qty,userId:uid,addedAt:new Date().toISOString()})
     }
     setParsed([]); setShowImport(false); setBulkText(""); setPastImg(null)
   }
@@ -389,7 +432,7 @@ export default function App() {
               <span style={{fontSize:10,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:700}}>{b.remaining}/{b.total}</span>
             </div>
           </div>
-          <button onClick={()=>{setShowOpen(b);setONotes("");setORating(0)}} style={{padding:"10px 16px",borderRadius:14,border:"none",fontSize:12,fontFamily:"'Nunito'",fontWeight:800,cursor:"pointer",background:"linear-gradient(135deg,#C0392B,#E74C3C)",color:"#FFF",whiteSpace:"nowrap"}}>Open 🍷</button>
+          <button onClick={()=>{setShowOpen(b);setONotes("");setORating(0);setOQty(1)}} style={{padding:"10px 16px",borderRadius:14,border:"none",fontSize:12,fontFamily:"'Nunito'",fontWeight:800,cursor:"pointer",background:"linear-gradient(135deg,#C0392B,#E74C3C)",color:"#FFF",whiteSpace:"nowrap"}}>Open 🍷</button>
         </div>))}
         {myEmpty.length>0&&<div>
           <p style={{fontFamily:"'Nunito'",fontSize:12,color:"#C8C0B8",fontWeight:700,margin:"20px 0 8px",letterSpacing:1}}>FINISHED</p>
@@ -534,19 +577,28 @@ export default function App() {
               </div>
             </div>}
         </div>
-        {pastImg&&parsed.length===0&&<button onClick={parseImg} disabled={proc} style={{...bBtn,marginBottom:10,background:proc?"#F5F0EB":"linear-gradient(135deg,#7D3C98,#9B59B6)",color:proc?"#C8C0B8":"#FFF"}}>{proc?"Analyzing...":"Parse Image"}</button>}
+        {pastImg&&parsed.length===0&&<button onClick={parseImg} disabled={proc} style={{...bBtn,marginBottom:10,background:proc?"#F5F0EB":"linear-gradient(135deg,#7D3C98,#9B59B6)",color:proc?"#C8C0B8":"#FFF"}}>{proc?"Analyzing & enriching...":"Parse Image"}</button>}
         {!pastImg&&<div>
           <div style={{display:"flex",alignItems:"center",gap:8,margin:"2px 0 10px"}}><div style={{flex:1,height:1,background:"#E5E0DA"}} /><span style={{fontSize:11,color:"#C8C0B8",fontFamily:"'Nunito'",fontWeight:700}}>or type/paste text</span><div style={{flex:1,height:1,background:"#E5E0DA"}} /></div>
           <textarea value={bulkText} onChange={e=>setBulkText(e.target.value)} rows={3} placeholder={"2x Opus One 2019 - $350\nMargaux 2005 - $890"} style={{...fi,resize:"vertical",fontSize:13,lineHeight:1.5,marginBottom:8}} />
-          <button onClick={parseTxt} disabled={proc||!bulkText.trim()} style={{...bBtn,background:bulkText.trim()&&!proc?"linear-gradient(135deg,#7D3C98,#9B59B6)":"#F5F0EB",color:bulkText.trim()&&!proc?"#FFF":"#C8C0B8"}}>{proc?"Parsing...":"Parse Text"}</button>
+          <button onClick={parseTxt} disabled={proc||!bulkText.trim()} style={{...bBtn,background:bulkText.trim()&&!proc?"linear-gradient(135deg,#7D3C98,#9B59B6)":"#F5F0EB",color:bulkText.trim()&&!proc?"#FFF":"#C8C0B8"}}>{proc?"Analyzing & enriching...":"Parse Text"}</button>
         </div>}
         {aiErr&&<p style={{color:"#E74C3C",fontSize:11,margin:"8px 0",fontFamily:"'Nunito'",fontWeight:600}}>{aiErr}</p>}
         {parsed.length>0&&<div style={{marginTop:10}}>
           <p style={{fontSize:12,color:"#A09890",fontFamily:"'Nunito'",fontWeight:700,marginBottom:6}}>{parsed.length} items found</p>
           {parsed.map((it,idx)=>(<div key={idx} onClick={()=>{const n=[...parsed];n[idx]={...n[idx],selected:!n[idx].selected};setParsed(n)}} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:it.selected?"#FFF":"#FAFAFA",borderRadius:12,marginBottom:4,cursor:"pointer",opacity:it.selected?1:0.4,border:"1px solid "+(it.selected?"#F5F0EB":"transparent")}}>
-            <div style={{width:20,height:20,borderRadius:6,border:"2px solid "+(it.selected?"#C0392B":"#D5D0CB"),display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#C0392B",background:it.selected?"#C0392B10":"transparent"}}>{it.selected?"\u2713":""}</div>
-            <div style={{flex:1}}><p style={{margin:0,fontSize:14,color:"#2D2420",fontFamily:"'Nunito'",fontWeight:800}}>{it.name}</p></div>
-            {it.price&&<span style={{fontSize:13,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:800}}>{fp(it.price)}</span>}
+            <div style={{width:20,height:20,borderRadius:6,border:"2px solid "+(it.selected?"#C0392B":"#D5D0CB"),display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#C0392B",background:it.selected?"#C0392B10":"transparent",flexShrink:0}}>{it.selected?"\u2713":""}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <p style={{margin:0,fontSize:14,color:"#2D2420",fontFamily:"'Nunito'",fontWeight:800,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}{it.vintage?<span style={{color:"#B8B0A8",fontWeight:600}}>{" '"+it.vintage.slice(-2)}</span>:""}</p>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                {it.producer&&<span style={{fontSize:11,color:"#8A8078",fontFamily:"'Nunito'",fontWeight:600}}>{it.producer}</span>}
+                {it.region&&<span style={{fontSize:11,color:"#A09890",fontFamily:"'Nunito'",fontStyle:"italic"}}>{it.region}</span>}
+              </div>
+            </div>
+            <div style={{textAlign:"right",flexShrink:0}}>
+              {it.quantity>1&&<span style={{fontSize:11,color:"#A09890",fontFamily:"'Nunito'",fontWeight:700,display:"block"}}>x{it.quantity}</span>}
+              {it.price!=null&&<span style={{fontSize:13,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:800}}>{fp(it.price)}{it.quantity>1?" ea":""}</span>}
+            </div>
           </div>))}
           <button onClick={doImport} disabled={!parsed.some(i=>i.selected)} style={{...bBtn,marginTop:8,background:"linear-gradient(135deg,#C0392B,#E74C3C)",color:"#FFF"}}>Import {parsed.filter(i=>i.selected).length} to Cellar 🗄️</button>
         </div>}
@@ -557,12 +609,20 @@ export default function App() {
           <span style={{fontSize:48}}>{gt(showOpen.type).emoji}</span>
           <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"8px 0 2px"}}>{showOpen.name}</h3>
           {showOpen.producer&&<p style={{fontSize:13,color:"#8A8078",fontFamily:"'Nunito'",fontWeight:600,margin:0}}>{showOpen.producer}</p>}
-          {showOpen.price!=null&&<p style={{fontSize:14,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:800,margin:"4px 0 0"}}>{fp(showOpen.price)}</p>}
+          {showOpen.price!=null&&<p style={{fontSize:14,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:800,margin:"4px 0 0"}}>{fp(showOpen.price)} /bottle</p>}
           <p style={{fontSize:11,color:"#C8C0B8",fontFamily:"'Nunito'",fontWeight:700,margin:"6px 0 12px"}}>{showOpen.remaining} of {showOpen.total} remaining</p>
+          {showOpen.remaining>1&&<div style={{marginBottom:12}}>
+            <div style={{textAlign:"left"}}><label style={fl}>How many to open?</label></div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:12}}>
+              <button onClick={()=>setOQty(Math.max(1,oQty-1))} style={{width:36,height:36,borderRadius:12,border:"1px solid #F0EBE6",background:"#FFF",fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#8A8078"}}>−</button>
+              <span style={{fontSize:24,fontFamily:"'Nunito'",fontWeight:900,color:"#2D2420",minWidth:32,textAlign:"center"}}>{oQty}</span>
+              <button onClick={()=>setOQty(Math.min(showOpen.remaining,oQty+1))} style={{width:36,height:36,borderRadius:12,border:"1px solid #F0EBE6",background:"#FFF",fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#8A8078"}}>+</button>
+            </div>
+          </div>}
           <div style={{textAlign:"left"}}><label style={fl}>Rating</label></div>
           <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><Stars rating={oRating} onRate={setORating} size={28} /></div>
           <textarea placeholder="Quick tasting notes..." value={oNotes} onChange={e=>setONotes(e.target.value)} rows={2} style={{...fi,resize:"vertical",marginBottom:10}} />
-          <button onClick={doOpenBottle} style={{...bBtn,background:"linear-gradient(135deg,#C0392B,#E74C3C)",color:"#FFF"}}>Open Bottle 🍷</button>
+          <button onClick={doOpenBottle} style={{...bBtn,background:"linear-gradient(135deg,#C0392B,#E74C3C)",color:"#FFF"}}>Open {oQty>1?oQty+" Bottles":"Bottle"} 🍷</button>
         </div>}
       </Modal>
 
