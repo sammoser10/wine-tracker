@@ -196,6 +196,17 @@ export default function App() {
     }
   }
 
+  const handleFile = async (file) => {
+    if(!file||!file.type.startsWith("image/")) return
+    try {
+      const dataUrl = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(file)})
+      const resized = await new Promise((res,rej)=>{
+        const img=new Image(); img.onload=()=>{let w=img.width,h=img.height;const m=1024;if(w>m||h>m){const s=m/Math.max(w,h);w=Math.round(w*s);h=Math.round(h*s)}const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);const o=c.toDataURL("image/jpeg",0.7);res({base64:o.split(",")[1],mediaType:"image/jpeg",preview:o})}; img.onerror=rej; img.src=dataUrl
+      })
+      setPastImg(resized); setAiErr("")
+    } catch { setAiErr("Failed to process image") }
+  }
+
   const parseImg = async () => {
     if(!pastImg||proc) return; setProc(true); setParsed([]); setAiErr("")
     try { const items=await aiReceipt(pastImg.base64,pastImg.mediaType); if(!Array.isArray(items)||!items.length) setAiErr("No wines found"); else setParsed(items.map(it=>({...it,selected:true}))) }
@@ -507,9 +518,21 @@ export default function App() {
 
       <Modal open={showImport} onClose={()=>setShowImport(false)}>
         <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"0 0 12px"}}>Import Purchases 📸</h3>
-        <div onPaste={handlePaste} tabIndex={0} style={{width:"100%",padding:pastImg?"8px":"20px 16px",borderRadius:16,border:pastImg?"2px solid #C0392B30":"2px dashed #E5E0DA",background:"#F5F0EB",textAlign:"center",marginBottom:10,outline:"none",cursor:"pointer"}}>
+        <div onPaste={handlePaste} tabIndex={0} style={{width:"100%",padding:pastImg?"8px":"16px",borderRadius:16,border:pastImg?"2px solid #C0392B30":"2px dashed #E5E0DA",background:"#F5F0EB",textAlign:"center",marginBottom:10,outline:"none",cursor:"pointer"}}>
           {pastImg ? <div style={{position:"relative"}}><img src={pastImg.preview} alt="Receipt" style={{width:"100%",borderRadius:12,maxHeight:180,objectFit:"contain"}} /><button onClick={ev=>{ev.stopPropagation();setPastImg(null);setParsed([])}} style={{position:"absolute",top:6,right:6,width:24,height:24,borderRadius:"50%",border:"none",background:"rgba(0,0,0,0.5)",color:"#FFF",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>x</button></div>
-          : <span style={{color:"#A09890",fontFamily:"'Nunito'",fontSize:13,fontWeight:600}}>Click here and paste a screenshot (Ctrl+V)</span>}
+          : <div style={{display:"flex",flexDirection:"column",gap:10,alignItems:"center",padding:"4px 0"}}>
+              <span style={{color:"#A09890",fontFamily:"'Nunito'",fontSize:13,fontWeight:600}}>Paste a screenshot or upload a photo</span>
+              <div style={{display:"flex",gap:8}}>
+                <label style={{padding:"10px 18px",borderRadius:14,border:"none",fontSize:12,fontFamily:"'Nunito'",fontWeight:800,cursor:"pointer",background:"linear-gradient(135deg,#7D3C98,#9B59B6)",color:"#FFF",display:"flex",alignItems:"center",gap:6}}>
+                  📷 Take Photo
+                  <input type="file" accept="image/*" capture="environment" onChange={e=>{if(e.target.files[0])handleFile(e.target.files[0]);e.target.value=""}} style={{display:"none"}} />
+                </label>
+                <label style={{padding:"10px 18px",borderRadius:14,border:"none",fontSize:12,fontFamily:"'Nunito'",fontWeight:800,cursor:"pointer",background:"linear-gradient(135deg,#E67E22,#F39C12)",color:"#FFF",display:"flex",alignItems:"center",gap:6}}>
+                  🖼️ Photo Library
+                  <input type="file" accept="image/*" onChange={e=>{if(e.target.files[0])handleFile(e.target.files[0]);e.target.value=""}} style={{display:"none"}} />
+                </label>
+              </div>
+            </div>}
         </div>
         {pastImg&&parsed.length===0&&<button onClick={parseImg} disabled={proc} style={{...bBtn,marginBottom:10,background:proc?"#F5F0EB":"linear-gradient(135deg,#7D3C98,#9B59B6)",color:proc?"#C8C0B8":"#FFF"}}>{proc?"Analyzing...":"Parse Image"}</button>}
         {!pastImg&&<div>
