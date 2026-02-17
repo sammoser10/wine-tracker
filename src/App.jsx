@@ -36,8 +36,17 @@ async function aiReceipt(b64, mt) {
 }
 
 // ── Small components ──
-function Stars({rating, onRate, size}) {
-  return <div style={{display:"flex",gap:1}}>{[1,2,3,4,5].map(i=><span key={i} onClick={()=>onRate&&onRate(i)} style={{cursor:onRate?"pointer":"default",fontSize:size||16,color:i<=rating?"#E67E22":"#E5E0DA",userSelect:"none"}}>{"\u2605"}</span>)}</div>
+function ScoreInput({value, onChange}) {
+  return <div style={{display:"flex",alignItems:"center",gap:6}}>
+    <input type="number" min="0" max="100" value={value||""} onChange={e=>{const v=parseInt(e.target.value);onChange(isNaN(v)?0:Math.min(100,Math.max(0,v)))}} placeholder="0-100" style={{width:64,padding:"8px 10px",borderRadius:10,border:"1px solid #F0EBE6",background:"#F5F0EB",color:"#2D2420",fontSize:14,fontFamily:"'Nunito'",fontWeight:800,textAlign:"center",outline:"none"}} />
+    <span style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:700}}>/100</span>
+  </div>
+}
+function ScoreBadge({rating, size}) {
+  if(!rating) return null
+  const sz = size || 13
+  const color = rating >= 90 ? "#27AE60" : rating >= 80 ? "#D4AC0D" : rating >= 70 ? "#E67E22" : "#C0392B"
+  return <span style={{fontSize:sz,fontFamily:"'Nunito'",fontWeight:900,color,background:color+"15",padding:"2px 8px",borderRadius:8}}>{rating}<span style={{fontSize:sz*0.75,fontWeight:600,color:"#B8B0A8"}}>/100</span></span>
 }
 function Modal({open, onClose, children}) {
   if(!open) return null
@@ -58,7 +67,7 @@ function SmartBar({onResult, placeholder, loading, setLoading}) {
   const go = async () => { if(!text.trim()||loading) return; setLoading(true); try { onResult(await aiWine(text)); setText("") } catch { onResult(null,"Couldn't parse") } setLoading(false) }
   return <div style={{display:"flex",gap:6}}>
     <input value={text} onChange={e=>setText(e.target.value)} placeholder={placeholder} onKeyDown={e=>e.key==="Enter"&&go()} style={{flex:1,fontSize:14,borderRadius:14,padding:"12px 16px",background:"#F5F0EB",border:"none",outline:"none",fontFamily:"'Nunito'",fontWeight:600,color:"#2D2420",width:"100%"}} />
-    <button onClick={go} disabled={loading||!text.trim()} style={{width:44,height:44,borderRadius:14,border:"none",fontSize:18,cursor:"pointer",background:text.trim()?"#C0392B":"#F5F0EB",color:text.trim()?"#FFF":"#C8C0B8",display:"flex",alignItems:"center",justifyContent:"center"}}>{loading?"...":"\u2192"}</button>
+    <button onClick={go} disabled={loading||!text.trim()} style={{height:44,borderRadius:14,border:"none",fontSize:12,fontFamily:"'Nunito'",fontWeight:800,cursor:"pointer",background:text.trim()?"linear-gradient(135deg,#C0392B,#E74C3C)":"#F5F0EB",color:text.trim()?"#FFF":"#C8C0B8",display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"0 14px",whiteSpace:"nowrap"}}>{loading?"...":"✨ AI Fill"}</button>
   </div>
 }
 function Av({user, sz, showName}) {
@@ -430,7 +439,7 @@ export default function App() {
                   {entry.producer&&<span style={{fontSize:12,color:"#8A8078",fontFamily:"'Nunito'",fontWeight:600}}>{entry.producer}</span>}
                   {entry.region&&<span style={{fontSize:12,color:"#A09890",fontFamily:"'Nunito'",fontStyle:"italic"}}>{entry.region}</span>}
                 </div>
-                {isDrink&&entry.rating>0&&<div style={{margin:"6px 0"}}><Stars rating={entry.rating} size={14} /></div>}
+                {isDrink&&entry.rating>0&&<div style={{margin:"6px 0"}}><ScoreBadge rating={entry.rating} size={13} /></div>}
                 {isDrink&&entry.notes&&<p style={{margin:"6px 0 0",fontSize:13,color:"#6D6259",fontFamily:"'Nunito'",fontWeight:500,lineHeight:1.5}}>{entry.notes}</p>}
                 {entry.price!=null&&<div style={{display:"flex",gap:10,marginTop:6,alignItems:"center"}}>
                   <span style={{fontSize:16,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:900}}>{fp(entry.price)}</span>
@@ -581,7 +590,7 @@ export default function App() {
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}><div><label style={fl}>Producer</label><input value={dF.producer} onChange={e=>setDF(f=>({...f,producer:e.target.value}))} style={fi} /></div><div><label style={fl}>Region</label><input value={dF.region} onChange={e=>setDF(f=>({...f,region:e.target.value}))} style={fi} /></div></div>
           <div><label style={fl}>Type</label><TypePills value={dF.type} onChange={v=>setDF(f=>({...f,type:v}))} /></div>
           <BuddyPicker users={users} selected={dF.drankWith} onChange={v=>setDF(f=>({...f,drankWith:v}))} currentUserId={uid} />
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,alignItems:"end"}}><div><label style={fl}>Price</label><input type="number" step="0.01" value={dF.price} onChange={e=>setDF(f=>({...f,price:e.target.value}))} placeholder="$" style={fi} /></div><div><label style={fl}>Date</label><input type="date" value={dF.date} onChange={e=>setDF(f=>({...f,date:e.target.value}))} style={fi} /></div><div><label style={fl}>Rating</label><Stars rating={dF.rating} onRate={r=>setDF(f=>({...f,rating:r}))} size={22} /></div></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,alignItems:"end"}}><div><label style={fl}>Price</label><input type="number" step="0.01" value={dF.price} onChange={e=>setDF(f=>({...f,price:e.target.value}))} placeholder="$" style={fi} /></div><div><label style={fl}>Date</label><input type="date" value={dF.date} onChange={e=>setDF(f=>({...f,date:e.target.value}))} style={fi} /></div><div><label style={fl}>Rating</label><ScoreInput value={dF.rating} onChange={r=>setDF(f=>({...f,rating:r}))} /></div></div>
           <textarea placeholder="Tasting notes..." value={dF.notes} onChange={e=>setDF(f=>({...f,notes:e.target.value}))} rows={2} style={{...fi,resize:"vertical"}} />
           <button onClick={subDrink} disabled={!dF.name.trim()} style={{...bBtn,background:dF.name.trim()?"linear-gradient(135deg,#C0392B,#E74C3C)":"#F5F0EB",color:dF.name.trim()?"#FFF":"#C8C0B8"}}>Log Drink 🍷</button>
         </div>
@@ -666,7 +675,7 @@ export default function App() {
           </div>}
           <div style={{textAlign:"left"}}><BuddyPicker users={users} selected={oDrankWith} onChange={setODrankWith} currentUserId={uid} /></div>
           <div style={{textAlign:"left",marginTop:8}}><label style={fl}>Rating</label></div>
-          <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><Stars rating={oRating} onRate={setORating} size={28} /></div>
+          <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><ScoreInput value={oRating} onChange={setORating} /></div>
           <textarea placeholder="Quick tasting notes..." value={oNotes} onChange={e=>setONotes(e.target.value)} rows={2} style={{...fi,resize:"vertical",marginBottom:10}} />
           <button onClick={doOpenBottle} style={{...bBtn,background:"linear-gradient(135deg,#C0392B,#E74C3C)",color:"#FFF"}}>Open {oQty>1?oQty+" Bottles":"Bottle"} 🍷</button>
         </div>}
@@ -683,7 +692,7 @@ export default function App() {
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}><div><label style={fl}>Producer</label><input value={eF.producer} onChange={e=>setEF(f=>({...f,producer:e.target.value}))} style={fi} /></div><div><label style={fl}>Region</label><input value={eF.region} onChange={e=>setEF(f=>({...f,region:e.target.value}))} style={fi} /></div></div>
             <div><label style={fl}>Type</label><TypePills value={eF.type} onChange={v=>setEF(f=>({...f,type:v}))} /></div>
             {eF.kind==="drink"&&<BuddyPicker users={users} selected={eF.drankWith} onChange={v=>setEF(f=>({...f,drankWith:v}))} currentUserId={uid} />}
-            {eF.kind==="drink"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,alignItems:"end"}}><div><label style={fl}>Price</label><input type="number" step="0.01" value={eF.price} onChange={e=>setEF(f=>({...f,price:e.target.value}))} style={fi} /></div><div><label style={fl}>Date</label><input type="date" value={eF.date} onChange={e=>setEF(f=>({...f,date:e.target.value}))} style={fi} /></div><div><label style={fl}>Rating</label><Stars rating={eF.rating} onRate={r=>setEF(f=>({...f,rating:r}))} size={22} /></div></div>}
+            {eF.kind==="drink"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,alignItems:"end"}}><div><label style={fl}>Price</label><input type="number" step="0.01" value={eF.price} onChange={e=>setEF(f=>({...f,price:e.target.value}))} style={fi} /></div><div><label style={fl}>Date</label><input type="date" value={eF.date} onChange={e=>setEF(f=>({...f,date:e.target.value}))} style={fi} /></div><div><label style={fl}>Rating</label><ScoreInput value={eF.rating} onChange={r=>setEF(f=>({...f,rating:r}))} /></div></div>}
             {eF.kind==="drink"&&<textarea placeholder="Tasting notes..." value={eF.notes} onChange={e=>setEF(f=>({...f,notes:e.target.value}))} rows={2} style={{...fi,resize:"vertical"}} />}
             {eF.kind==="purchase"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}><div><label style={fl}>Price</label><input type="number" step="0.01" value={eF.price} onChange={e=>setEF(f=>({...f,price:e.target.value}))} style={fi} /></div><div><label style={fl}>Qty</label><input type="number" min="1" value={eF.quantity} onChange={e=>setEF(f=>({...f,quantity:e.target.value}))} style={fi} /></div><div><label style={fl}>Store</label><input value={eF.store} onChange={e=>setEF(f=>({...f,store:e.target.value}))} style={fi} /></div></div>}
             {eF.kind==="purchase"&&<div><label style={fl}>Date</label><input type="date" value={eF.date} onChange={e=>setEF(f=>({...f,date:e.target.value}))} style={fi} /></div>}
@@ -710,7 +719,7 @@ export default function App() {
             </div>
             <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"4px 0"}}>{showDetail.name}</h3>
             {showDetail.producer&&<p style={{margin:"4px 0",fontSize:13,color:"#8A8078",fontFamily:"'Nunito'",fontWeight:600}}>{showDetail.producer}</p>}
-            {isDrink&&showDetail.rating>0&&<div style={{marginBottom:6}}><Stars rating={showDetail.rating} size={16} /></div>}
+            {isDrink&&showDetail.rating>0&&<div style={{marginBottom:6}}><ScoreBadge rating={showDetail.rating} size={15} /></div>}
             {isDrink&&showDetail.notes&&<p style={{fontSize:13,color:"#6D6259",fontFamily:"'Nunito'",fontWeight:500,lineHeight:1.5,margin:"0 0 8px"}}>{showDetail.notes}</p>}
             {showDetail.price!=null&&<p style={{fontSize:18,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:900,margin:"6px 0"}}>{fp(showDetail.price)}</p>}
             <div style={{display:"flex",gap:6,marginTop:8}}>
