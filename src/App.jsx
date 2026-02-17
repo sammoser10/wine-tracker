@@ -22,7 +22,7 @@ const fmtDT = iso => { try { return new Date(iso).toLocaleString(undefined, { mo
 const ANTHROPIC_URL = "/api/anthropic"
 
 async function aiWine(text) {
-  const r = await fetch(ANTHROPIC_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, system:'Wine expert. Return ONLY JSON: {"name":"","producer":"","region":"","country":"","type":"Red|White|Rosé|Orange|Sparkling|Dessert","vintage":"","grape":""}', messages:[{role:"user",content:text}] }) })
+  const r = await fetch(ANTHROPIC_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, system:'Wine expert. Return ONLY JSON: {"name":"","producer":"","region":"","country":"","type":"Red|White|Rosé|Orange|Sparkling|Dessert","vintage":"","grape":"","price":null}', messages:[{role:"user",content:text}] }) })
   const d = await r.json(); return JSON.parse((d.content||[]).map(c=>c.text||"").join("").replace(/```json|```/g,"").trim())
 }
 async function aiBulk(text) {
@@ -102,10 +102,11 @@ export default function App() {
   const [feedF, setFeedF] = useState("all")
   const [bulkText, setBulkText] = useState("")
   const [pastImg, setPastImg] = useState(null)
-  const [dF, setDF] = useState({name:"",type:"Red",producer:"",region:"",grape:"",vintage:"",notes:"",rating:0,date:""})
+  const [dF, setDF] = useState({name:"",type:"Red",producer:"",region:"",grape:"",vintage:"",notes:"",rating:0,date:"",price:""})
   const [pF, setPF] = useState({name:"",type:"Red",producer:"",region:"",price:"",quantity:"1",store:"",vintage:"",date:""})
   const [oNotes, setONotes] = useState("")
   const [oRating, setORating] = useState(0)
+  const [lbMode, setLbMode] = useState("drinks")
 
   // Auth form state
   const [authMode, setAuthMode] = useState("signin")
@@ -146,7 +147,7 @@ export default function App() {
 
   const aiH = setter => (result, err) => {
     if(err){setAiErr(err);return} setAiErr("")
-    setter(f=>({...f,name:result.name||f.name,producer:result.producer||f.producer,region:[result.region,result.country].filter(Boolean).join(", ")||f.region,type:TYPES.find(t=>t.label===result.type)?result.type:f.type,grape:result.grape||f.grape,vintage:result.vintage||f.vintage}))
+    setter(f=>({...f,name:result.name||f.name,producer:result.producer||f.producer,region:[result.region,result.country].filter(Boolean).join(", ")||f.region,type:TYPES.find(t=>t.label===result.type)?result.type:f.type,grape:result.grape||f.grape,vintage:result.vintage||f.vintage,price:result.price!=null?String(result.price):f.price}))
   }
 
   const uid = profile?.id
@@ -154,8 +155,9 @@ export default function App() {
   const subDrink = async () => {
     if(!dF.name.trim()||!uid) return
     const d = dF.date||(selDay?ds(selDay):ti())
-    await addEntry({id:mid(),...dF,date:d,kind:"drink",userId:uid,createdAt:new Date().toISOString()})
-    setDF({name:"",type:"Red",producer:"",region:"",grape:"",vintage:"",notes:"",rating:0,date:""}); setShowDrink(false)
+    const price = dF.price ? parseFloat(dF.price) : null
+    await addEntry({id:mid(),...dF,date:d,kind:"drink",userId:uid,price,createdAt:new Date().toISOString()})
+    setDF({name:"",type:"Red",producer:"",region:"",grape:"",vintage:"",notes:"",rating:0,date:"",price:""}); setShowDrink(false)
   }
 
   const subBuy = async () => {
@@ -169,7 +171,7 @@ export default function App() {
   const doOpenBottle = async () => {
     if(!showOpen||!uid) return
     const b = showOpen
-    await addEntry({id:mid(),name:b.name,producer:b.producer,type:b.type,vintage:b.vintage,region:b.region,grape:"",notes:oNotes,rating:oRating,date:ti(),kind:"drink",userId:uid,createdAt:new Date().toISOString(),fromCollection:b.id})
+    await addEntry({id:mid(),name:b.name,producer:b.producer,type:b.type,vintage:b.vintage,region:b.region,grape:"",notes:oNotes,rating:oRating,date:ti(),kind:"drink",userId:uid,price:b.price,createdAt:new Date().toISOString(),fromCollection:b.id})
     await decrementBottle(b.id)
     setShowOpen(null); setONotes(""); setORating(0)
   }
@@ -337,11 +339,12 @@ export default function App() {
                 </div>
                 {isDrink&&entry.rating>0&&<div style={{margin:"6px 0"}}><Stars rating={entry.rating} size={14} /></div>}
                 {isDrink&&entry.notes&&<p style={{margin:"6px 0 0",fontSize:13,color:"#6D6259",fontFamily:"'Nunito'",fontWeight:500,lineHeight:1.5}}>{entry.notes}</p>}
-                {!isDrink&&<div style={{display:"flex",gap:10,marginTop:6,alignItems:"center"}}>
-                  {entry.price!=null&&<span style={{fontSize:16,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:900}}>{fp(entry.price)}</span>}
-                  {entry.quantity>1&&<span style={{fontSize:12,color:"#A09890",fontFamily:"'Nunito'",fontWeight:700}}>x{entry.quantity}</span>}
+                {entry.price!=null&&<div style={{display:"flex",gap:10,marginTop:6,alignItems:"center"}}>
+                  <span style={{fontSize:16,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:900}}>{fp(entry.price)}</span>
+                  {!isDrink&&entry.quantity>1&&<span style={{fontSize:12,color:"#A09890",fontFamily:"'Nunito'",fontWeight:700}}>x{entry.quantity}</span>}
                   {entry.store&&<span style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600}}>{entry.store}</span>}
                 </div>}
+                {!isDrink&&entry.price==null&&entry.store&&<div style={{marginTop:6}}><span style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600}}>{entry.store}</span></div>}
               </div>
               <div style={{display:"flex",alignItems:"center",padding:"8px 16px 10px",gap:4,borderTop:"1px solid #F5F0EB"}}>
                 <button onClick={()=>doToggleLike(entry.id)} style={{...sBtn,color:liked?"#E74C3C":"#C8C0B8"}}>{liked?"\u2665":"\u2661"}{likes.length>0&&<span style={{marginLeft:3,fontSize:12,color:"#A09890",fontWeight:700}}>{likes.length}</span>}</button>
@@ -371,6 +374,7 @@ export default function App() {
             <p style={{margin:0,fontSize:15,fontFamily:"'Nunito'",fontWeight:800,color:"#2D2420",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}{b.vintage?<span style={{color:"#B8B0A8",fontWeight:600}}>{" '"+b.vintage.slice(-2)}</span>:""}</p>
             <div style={{display:"flex",gap:6,alignItems:"center",marginTop:2}}>
               {b.producer&&<span style={{fontSize:11,color:"#8A8078",fontFamily:"'Nunito'",fontWeight:600}}>{b.producer}</span>}
+              {b.price!=null&&<span style={{fontSize:11,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:700}}>{fp(b.price)}</span>}
               <span style={{fontSize:10,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:700}}>{b.remaining}/{b.total}</span>
             </div>
           </div>
@@ -412,28 +416,57 @@ export default function App() {
         <Tabs tabs={[{key:"week",label:"Week"},{key:"month",label:"Month"},{key:"year",label:"Year"},{key:"all",label:"All"}]} active={statsR} onChange={setStatsR} />
         {(()=>{
           const myE=entries.filter(e=>e.userId===uid); const nd=new Date()
-          let filt=myE.filter(e=>e.kind==="purchase")
-          if(statsR==="week"){const w=new Date(nd);w.setDate(w.getDate()-7);filt=filt.filter(p=>new Date(p.date+"T12:00:00")>=w)}
-          else if(statsR==="month") filt=filt.filter(p=>{const d=new Date(p.date+"T12:00:00");return d.getMonth()===nd.getMonth()&&d.getFullYear()===nd.getFullYear()})
-          else if(statsR==="year") filt=filt.filter(p=>new Date(p.date+"T12:00:00").getFullYear()===nd.getFullYear())
-          const spent=filt.reduce((s,p)=>s+(p.price||0)*(p.quantity||1),0)
-          const btls=filt.reduce((s,p)=>s+(p.quantity||1),0)
-          const drk=myE.filter(e=>e.kind==="drink").length
-          const byT={}; filt.forEach(p=>{byT[p.type]=(byT[p.type]||0)+(p.quantity||1)}); const mx=Math.max(...Object.values(byT),1)
+          let filtP=myE.filter(e=>e.kind==="purchase")
+          let filtD=myE.filter(e=>e.kind==="drink")
+          if(statsR==="week"){const w=new Date(nd);w.setDate(w.getDate()-7);filtP=filtP.filter(p=>new Date(p.date+"T12:00:00")>=w);filtD=filtD.filter(p=>new Date(p.date+"T12:00:00")>=w)}
+          else if(statsR==="month"){filtP=filtP.filter(p=>{const d=new Date(p.date+"T12:00:00");return d.getMonth()===nd.getMonth()&&d.getFullYear()===nd.getFullYear()});filtD=filtD.filter(p=>{const d=new Date(p.date+"T12:00:00");return d.getMonth()===nd.getMonth()&&d.getFullYear()===nd.getFullYear()})}
+          else if(statsR==="year"){filtP=filtP.filter(p=>new Date(p.date+"T12:00:00").getFullYear()===nd.getFullYear());filtD=filtD.filter(p=>new Date(p.date+"T12:00:00").getFullYear()===nd.getFullYear())}
+          const purchaseSpent=filtP.reduce((s,p)=>s+(p.price||0)*(p.quantity||1),0)
+          const drinkSpent=filtD.reduce((s,p)=>s+(p.price||0),0)
+          const btls=filtP.reduce((s,p)=>s+(p.quantity||1),0)
+          const drk=filtD.length
+          const byT={}; filtP.forEach(p=>{byT[p.type]=(byT[p.type]||0)+(p.quantity||1)}); const mx=Math.max(...Object.values(byT),1)
           return <div style={{marginTop:14}}>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:14}}>
-              {[["Spent",fp(spent),"#C0392B"],["Bought",btls,"#D4AC0D"],["Drunk",drk,"#7D3C98"]].map(x=>(<div key={x[0]} style={{background:"#FFF",borderRadius:16,padding:14,textAlign:"center",boxShadow:"0 2px 10px rgba(0,0,0,0.04)",border:"1px solid #F5F0EB"}}><p style={{fontSize:9,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1.5,margin:"0 0 4px"}}>{x[0]}</p><p style={{fontSize:22,color:x[2],fontFamily:"'Nunito'",fontWeight:900,margin:0}}>{x[1]}</p></div>))}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+              <div style={{background:"#FFF",borderRadius:16,padding:14,textAlign:"center",boxShadow:"0 2px 10px rgba(0,0,0,0.04)",border:"1px solid #F5F0EB"}}>
+                <p style={{fontSize:9,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1.5,margin:"0 0 4px"}}>PURCHASE $</p>
+                <p style={{fontSize:22,color:"#D4AC0D",fontFamily:"'Nunito'",fontWeight:900,margin:0}}>{fp(purchaseSpent)}</p>
+                <p style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600,margin:"2px 0 0"}}>{btls} bottle{btls!==1?"s":""}</p>
+              </div>
+              <div style={{background:"#FFF",borderRadius:16,padding:14,textAlign:"center",boxShadow:"0 2px 10px rgba(0,0,0,0.04)",border:"1px solid #F5F0EB"}}>
+                <p style={{fontSize:9,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1.5,margin:"0 0 4px"}}>CONSUMED $</p>
+                <p style={{fontSize:22,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:900,margin:0}}>{fp(drinkSpent)}</p>
+                <p style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600,margin:"2px 0 0"}}>{drk} wine{drk!==1?"s":""}</p>
+              </div>
             </div>
             {Object.keys(byT).length>0&&<div style={{background:"#FFF",borderRadius:16,padding:14,marginBottom:10,border:"1px solid #F5F0EB"}}>
               <p style={{fontSize:10,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1,margin:"0 0 10px"}}>BY TYPE</p>
               {Object.entries(byT).sort((a,b)=>b[1]-a[1]).map(p=>(<div key={p[0]} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontSize:14}}>{gt(p[0]).emoji}</span><div style={{flex:1,height:8,borderRadius:4,background:"#F5F0EB",overflow:"hidden"}}><div style={{width:(p[1]/mx*100)+"%",height:"100%",borderRadius:4,background:gt(p[0]).color}} /></div><span style={{fontSize:12,color:"#2D2420",fontFamily:"'Nunito'",fontWeight:800,minWidth:20,textAlign:"right"}}>{p[1]}</span></div>))}
             </div>}
             {Object.keys(users).length>1&&<div style={{background:"#FFF",borderRadius:16,padding:14,border:"1px solid #F5F0EB"}}>
-              <p style={{fontSize:10,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1,margin:"0 0 10px"}}>LEADERBOARD 🏆</p>
-              {Object.values(users).map(u=>{const ud=entries.filter(e=>e.userId===u.id&&e.kind==="drink").length;const ub=entries.filter(e=>e.userId===u.id&&e.kind==="purchase").reduce((s,p)=>s+(p.quantity||1),0);return{...u,ud,ub,tot:ud+ub}}).sort((a,b)=>b.tot-a.tot).map((u,i)=>(
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <p style={{fontSize:10,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1,margin:0}}>LEADERBOARD 🏆</p>
+                <div style={{display:"flex",gap:3,background:"#F5F0EB",borderRadius:10,padding:2}}>
+                  {[{k:"drinks",l:"🍷 Drinks"},{k:"buys",l:"🛒 Buys"},{k:"spent",l:"💰 Spent"}].map(m=>(
+                    <button key={m.k} onClick={()=>setLbMode(m.k)} style={{padding:"4px 8px",borderRadius:8,border:"none",fontSize:10,fontFamily:"'Nunito'",fontWeight:lbMode===m.k?800:600,cursor:"pointer",background:lbMode===m.k?"#FFF":"transparent",color:lbMode===m.k?"#2D2420":"#A09890",boxShadow:lbMode===m.k?"0 1px 4px rgba(0,0,0,0.06)":"none"}}>{m.l}</button>
+                  ))}
+                </div>
+              </div>
+              {Object.values(users).map(u=>{
+                const uDrinks=entries.filter(e=>e.userId===u.id&&e.kind==="drink").length
+                const uBuys=entries.filter(e=>e.userId===u.id&&e.kind==="purchase").reduce((s,p)=>s+(p.quantity||1),0)
+                const uDrinkSpent=entries.filter(e=>e.userId===u.id&&e.kind==="drink").reduce((s,e)=>s+(e.price||0),0)
+                const uBuySpent=entries.filter(e=>e.userId===u.id&&e.kind==="purchase").reduce((s,e)=>s+(e.price||0)*(e.quantity||1),0)
+                const sortVal=lbMode==="drinks"?uDrinks:lbMode==="buys"?uBuys:uDrinkSpent+uBuySpent
+                const display=lbMode==="drinks"?("🍷 "+uDrinks):lbMode==="buys"?("🛒 "+uBuys):fp(uDrinkSpent+uBuySpent)
+                return{...u,sortVal,display,uDrinks,uBuys,uDrinkSpent,uBuySpent}
+              }).sort((a,b)=>b.sortVal-a.sortVal).map((u,i)=>(
                 <div key={u.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                   <span style={{fontSize:14,fontFamily:"'Nunito'",fontWeight:900,color:i===0?"#C0392B":i===1?"#D4AC0D":"#B8B0A8",width:18}}>{i+1}</span>
-                  <Av user={u} sz={26} /><div style={{marginLeft:"auto",display:"flex",gap:8}}><span style={{fontSize:11,color:"#A09890",fontFamily:"'Nunito'",fontWeight:700}}>🍷{u.ud}</span><span style={{fontSize:11,color:"#A09890",fontFamily:"'Nunito'",fontWeight:700}}>🛒{u.ub}</span></div>
+                  <Av user={u} sz={26} />
+                  <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
+                    <span style={{fontSize:13,color:"#2D2420",fontFamily:"'Nunito'",fontWeight:800}}>{u.display}</span>
+                  </div>
                 </div>
               ))}
             </div>}
@@ -452,7 +485,7 @@ export default function App() {
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}><div><label style={fl}>Name *</label><input value={dF.name} onChange={e=>setDF(f=>({...f,name:e.target.value}))} style={fi} /></div><div><label style={fl}>Vintage</label><input value={dF.vintage} onChange={e=>setDF(f=>({...f,vintage:e.target.value}))} style={fi} /></div></div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}><div><label style={fl}>Producer</label><input value={dF.producer} onChange={e=>setDF(f=>({...f,producer:e.target.value}))} style={fi} /></div><div><label style={fl}>Region</label><input value={dF.region} onChange={e=>setDF(f=>({...f,region:e.target.value}))} style={fi} /></div></div>
           <div><label style={fl}>Type</label><TypePills value={dF.type} onChange={v=>setDF(f=>({...f,type:v}))} /></div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,alignItems:"end"}}><div><label style={fl}>Date</label><input type="date" value={dF.date} onChange={e=>setDF(f=>({...f,date:e.target.value}))} style={fi} /></div><div><label style={fl}>Rating</label><Stars rating={dF.rating} onRate={r=>setDF(f=>({...f,rating:r}))} size={22} /></div></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,alignItems:"end"}}><div><label style={fl}>Price</label><input type="number" step="0.01" value={dF.price} onChange={e=>setDF(f=>({...f,price:e.target.value}))} placeholder="$" style={fi} /></div><div><label style={fl}>Date</label><input type="date" value={dF.date} onChange={e=>setDF(f=>({...f,date:e.target.value}))} style={fi} /></div><div><label style={fl}>Rating</label><Stars rating={dF.rating} onRate={r=>setDF(f=>({...f,rating:r}))} size={22} /></div></div>
           <textarea placeholder="Tasting notes..." value={dF.notes} onChange={e=>setDF(f=>({...f,notes:e.target.value}))} rows={2} style={{...fi,resize:"vertical"}} />
           <button onClick={subDrink} disabled={!dF.name.trim()} style={{...bBtn,background:dF.name.trim()?"linear-gradient(135deg,#C0392B,#E74C3C)":"#F5F0EB",color:dF.name.trim()?"#FFF":"#C8C0B8"}}>Log Drink 🍷</button>
         </div>
@@ -501,6 +534,7 @@ export default function App() {
           <span style={{fontSize:48}}>{gt(showOpen.type).emoji}</span>
           <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"8px 0 2px"}}>{showOpen.name}</h3>
           {showOpen.producer&&<p style={{fontSize:13,color:"#8A8078",fontFamily:"'Nunito'",fontWeight:600,margin:0}}>{showOpen.producer}</p>}
+          {showOpen.price!=null&&<p style={{fontSize:14,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:800,margin:"4px 0 0"}}>{fp(showOpen.price)}</p>}
           <p style={{fontSize:11,color:"#C8C0B8",fontFamily:"'Nunito'",fontWeight:700,margin:"6px 0 12px"}}>{showOpen.remaining} of {showOpen.total} remaining</p>
           <div style={{textAlign:"left"}}><label style={fl}>Rating</label></div>
           <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><Stars rating={oRating} onRate={setORating} size={28} /></div>
@@ -518,7 +552,7 @@ export default function App() {
             {showDetail.producer&&<p style={{margin:"4px 0",fontSize:13,color:"#8A8078",fontFamily:"'Nunito'",fontWeight:600}}>{showDetail.producer}</p>}
             {isDrink&&showDetail.rating>0&&<div style={{marginBottom:6}}><Stars rating={showDetail.rating} size={16} /></div>}
             {isDrink&&showDetail.notes&&<p style={{fontSize:13,color:"#6D6259",fontFamily:"'Nunito'",fontWeight:500,lineHeight:1.5,margin:"0 0 8px"}}>{showDetail.notes}</p>}
-            {!isDrink&&showDetail.price!=null&&<p style={{fontSize:18,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:900,margin:"6px 0"}}>{fp(showDetail.price)}</p>}
+            {showDetail.price!=null&&<p style={{fontSize:18,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:900,margin:"6px 0"}}>{fp(showDetail.price)}</p>}
             <div style={{display:"flex",gap:6,marginTop:8}}>
               <button onClick={()=>setShowDetail(null)} style={{...bBtn,flex:1,background:"#F5F0EB",color:"#8A8078"}}>Close</button>
               {own&&<button onClick={()=>doDelete(showDetail.id)} style={{...bBtn,flex:1,background:"#FFF",color:"#C0392B",border:"2px solid #C0392B30"}}>Delete</button>}
