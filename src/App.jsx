@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useWineData, useAuth, addEntry, deleteEntry, addBottle, decrementBottle, toggleReaction, addComment as postComment } from './data'
+import { useWineData, useAuth, addEntry, updateEntry, deleteEntry, addBottle, decrementBottle, toggleReaction, addComment as postComment } from './data'
 
 const TYPES = [
   { label: "Red", color: "#C0392B", bg: "#C0392B15", emoji: "🍷" },
@@ -73,6 +73,30 @@ function TypePills({value, onChange}) {
     {TYPES.map(t=><button key={t.label} onClick={()=>onChange(t.label)} style={{padding:"6px 12px",borderRadius:20,fontSize:11,fontFamily:"'Nunito'",cursor:"pointer",border:"none",fontWeight:value===t.label?800:600,background:value===t.label?t.color:"#F5F0EB",color:value===t.label?"#FFF":"#8A8078",transition:"all 0.2s"}}>{t.emoji} {t.label}</button>)}
   </div>
 }
+function BuddyPicker({users, selected, onChange, currentUserId}) {
+  const others = Object.values(users).filter(u => u.id !== currentUserId)
+  if(others.length === 0) return null
+  return <div>
+    <label style={fl}>Drank with</label>
+    <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+      {others.map(u => {
+        const sel = selected.includes(u.id)
+        return <button key={u.id} onClick={()=>onChange(sel ? selected.filter(id=>id!==u.id) : [...selected, u.id])} style={{display:"flex",alignItems:"center",gap:5,padding:"6px 10px",borderRadius:20,border:sel?"2px solid #C0392B":"2px solid #F0EBE6",background:sel?"#C0392B10":"#FFF",cursor:"pointer",fontSize:12,fontFamily:"'Nunito'",fontWeight:sel?800:600,color:sel?"#C0392B":"#8A8078"}}>
+          <span style={{fontSize:14}}>{u.avatar||"🍷"}</span>{u.name}
+        </button>
+      })}
+    </div>
+  </div>
+}
+function AvatarRow({userIds, users, sz}) {
+  const size = sz || 24
+  return <div style={{display:"flex"}}>
+    {userIds.map((uid, j) => {
+      const u = users[uid]
+      return <div key={uid} style={{width:size,height:size,borderRadius:"50%",background:"linear-gradient(135deg,#F5F0EB,#E5E0DA)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*0.5,border:"2px solid #FFF",marginLeft:j>0?-6:0,zIndex:10-j,boxShadow:"0 1px 3px rgba(0,0,0,0.08)"}}>{(u||{}).avatar||"🍷"}</div>
+    })}
+  </div>
+}
 
 const fi = { width:"100%", padding:"10px 14px", borderRadius:12, border:"1px solid #F0EBE6", background:"#F5F0EB", color:"#2D2420", fontSize:13, outline:"none", fontFamily:"'Nunito'", fontWeight:600 }
 const fl = { fontSize:9, color:"#B8B0A8", fontFamily:"'Nunito'", fontWeight:800, letterSpacing:1.5, textTransform:"uppercase", display:"block", marginBottom:3 }
@@ -92,6 +116,7 @@ export default function App() {
   const [showImport, setShowImport] = useState(false)
   const [showDetail, setShowDetail] = useState(null)
   const [showOpen, setShowOpen] = useState(null)
+  const [showEdit, setShowEdit] = useState(null)
   const [aiLoad, setAiLoad] = useState(false)
   const [aiErr, setAiErr] = useState("")
   const [parsed, setParsed] = useState([])
@@ -102,11 +127,13 @@ export default function App() {
   const [feedF, setFeedF] = useState("all")
   const [bulkText, setBulkText] = useState("")
   const [pastImg, setPastImg] = useState(null)
-  const [dF, setDF] = useState({name:"",type:"Red",producer:"",region:"",grape:"",vintage:"",notes:"",rating:0,date:"",price:""})
+  const [dF, setDF] = useState({name:"",type:"Red",producer:"",region:"",grape:"",vintage:"",notes:"",rating:0,date:"",price:"",drankWith:[]})
   const [pF, setPF] = useState({name:"",type:"Red",producer:"",region:"",price:"",quantity:"1",store:"",vintage:"",date:""})
+  const [eF, setEF] = useState(null)
   const [oNotes, setONotes] = useState("")
   const [oRating, setORating] = useState(0)
   const [oQty, setOQty] = useState(1)
+  const [oDrankWith, setODrankWith] = useState([])
   const [lbMode, setLbMode] = useState("drinks")
 
   // Auth form state
@@ -146,6 +173,12 @@ export default function App() {
   const ds = d => yr+"-"+String(mo+1).padStart(2,"0")+"-"+String(d).padStart(2,"0")
   const dItems = d => d ? entries.filter(e=>e.date===ds(d)) : []
 
+  // Helper: get all participants of a drink entry
+  const getParticipants = (entry) => {
+    if(entry.kind !== "drink") return [entry.userId]
+    return [entry.userId, ...(entry.drankWith || [])].filter((v,i,a) => a.indexOf(v) === i)
+  }
+
   const aiH = setter => (result, err) => {
     if(err){setAiErr(err);return} setAiErr("")
     setter(f=>({...f,name:result.name||f.name,producer:result.producer||f.producer,region:[result.region,result.country].filter(Boolean).join(", ")||f.region,type:TYPES.find(t=>t.label===result.type)?result.type:f.type,grape:result.grape||f.grape,vintage:result.vintage||f.vintage,price:result.price!=null?String(result.price):f.price}))
@@ -157,8 +190,8 @@ export default function App() {
     if(!dF.name.trim()||!uid) return
     const d = dF.date||(selDay?ds(selDay):ti())
     const price = dF.price ? parseFloat(dF.price) : null
-    await addEntry({id:mid(),...dF,date:d,kind:"drink",userId:uid,price,createdAt:new Date().toISOString()})
-    setDF({name:"",type:"Red",producer:"",region:"",grape:"",vintage:"",notes:"",rating:0,date:"",price:""}); setShowDrink(false)
+    await addEntry({id:mid(),...dF,date:d,kind:"drink",userId:uid,price,drankWith:dF.drankWith,createdAt:new Date().toISOString()})
+    setDF({name:"",type:"Red",producer:"",region:"",grape:"",vintage:"",notes:"",rating:0,date:"",price:"",drankWith:[]}); setShowDrink(false)
   }
 
   const subBuy = async () => {
@@ -173,29 +206,33 @@ export default function App() {
     if(!showOpen||!uid) return
     const b = showOpen
     const qty = oQty || 1
-    await addEntry({id:mid(),name:b.name,producer:b.producer,type:b.type,vintage:b.vintage,region:b.region,grape:"",notes:oNotes,rating:oRating,date:ti(),kind:"drink",userId:uid,price:b.price!=null?(b.price*qty):null,quantity:qty,createdAt:new Date().toISOString(),fromCollection:b.id})
+    await addEntry({id:mid(),name:b.name,producer:b.producer,type:b.type,vintage:b.vintage,region:b.region,grape:"",notes:oNotes,rating:oRating,date:ti(),kind:"drink",userId:uid,price:b.price!=null?(b.price*qty):null,quantity:qty,drankWith:oDrankWith,createdAt:new Date().toISOString(),fromCollection:b.id})
     for(let i=0;i<qty;i++) await decrementBottle(b.id)
-    setShowOpen(null); setONotes(""); setORating(0); setOQty(1)
+    setShowOpen(null); setONotes(""); setORating(0); setOQty(1); setODrankWith([])
   }
 
-  const handlePaste = async (e) => {
-    const items = e.clipboardData && e.clipboardData.items
-    if(!items) return
-    for(let i=0;i<items.length;i++) {
-      if(items[i].type && items[i].type.startsWith("image/")) {
-        e.preventDefault()
-        const file = items[i].getAsFile()
-        if(!file) return
-        try {
-          const dataUrl = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(file)})
-          const resized = await new Promise((res,rej)=>{
-            const img=new Image(); img.onload=()=>{let w=img.width,h=img.height;const m=1024;if(w>m||h>m){const s=m/Math.max(w,h);w=Math.round(w*s);h=Math.round(h*s)}const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);const o=c.toDataURL("image/jpeg",0.7);res({base64:o.split(",")[1],mediaType:"image/jpeg",preview:o})}; img.onerror=rej; img.src=dataUrl
-          })
-          setPastImg(resized); setAiErr("")
-        } catch { setAiErr("Failed to process image") }
-        return
-      }
-    }
+  // Edit
+  const openEdit = (entry) => {
+    setEF({
+      id: entry.id, kind: entry.kind, name: entry.name, type: entry.type,
+      producer: entry.producer || "", region: entry.region || "", grape: entry.grape || "",
+      vintage: entry.vintage || "", notes: entry.notes || "", rating: entry.rating || 0,
+      price: entry.price != null ? String(entry.price) : "", quantity: String(entry.quantity || 1),
+      store: entry.store || "", date: entry.date, drankWith: entry.drankWith || [],
+    })
+    setShowEdit(entry)
+    setAiErr("")
+  }
+  const subEdit = async () => {
+    if(!eF||!eF.name.trim()) return
+    const price = eF.price ? parseFloat(eF.price) : null
+    await updateEntry(eF.id, {
+      name: eF.name, type: eF.type, producer: eF.producer, region: eF.region,
+      grape: eF.grape, vintage: eF.vintage, notes: eF.notes, rating: eF.rating,
+      price, quantity: parseInt(eF.quantity) || 1, store: eF.store, date: eF.date,
+      drankWith: eF.drankWith,
+    })
+    setShowEdit(null); setEF(null)
   }
 
   const handleFile = async (file) => {
@@ -209,6 +246,19 @@ export default function App() {
     } catch { setAiErr("Failed to process image") }
   }
 
+  const handlePaste = async (e) => {
+    const items = e.clipboardData && e.clipboardData.items
+    if(!items) return
+    for(let i=0;i<items.length;i++) {
+      if(items[i].type && items[i].type.startsWith("image/")) {
+        e.preventDefault()
+        const file = items[i].getAsFile()
+        if(file) handleFile(file)
+        return
+      }
+    }
+  }
+
   const enrichWithAI = async (items) => {
     const enriched = []
     for(const it of items) {
@@ -217,17 +267,11 @@ export default function App() {
         const qty = it.quantity || 1
         const unitPrice = it.price != null && qty > 1 ? Math.round((it.price / qty) * 100) / 100 : it.price || null
         enriched.push({
-          ...it,
-          name: ai.name || it.name,
-          producer: ai.producer || it.producer || "",
+          ...it, name: ai.name || it.name, producer: ai.producer || it.producer || "",
           region: [ai.region, ai.country].filter(Boolean).join(", ") || "",
           type: TYPES.find(t => t.label === ai.type) ? ai.type : (it.type || "Red"),
-          grape: ai.grape || "",
-          vintage: ai.vintage || it.vintage || "",
-          price: unitPrice,
-          totalPrice: it.price || null,
-          quantity: qty,
-          selected: true,
+          grape: ai.grape || "", vintage: ai.vintage || it.vintage || "",
+          price: unitPrice, totalPrice: it.price || null, quantity: qty, selected: true,
         })
       } catch {
         const qty = it.quantity || 1
@@ -261,8 +305,7 @@ export default function App() {
   const doImport = async () => {
     if(!uid) return; const d=ti(); const sel=parsed.filter(i=>i.selected)
     for(const it of sel) {
-      const qty = it.quantity || 1
-      const unitPrice = it.price
+      const qty = it.quantity || 1; const unitPrice = it.price
       await addEntry({id:mid(),name:it.name||"?",producer:it.producer||"",type:TYPES.find(t=>t.label===it.type)?it.type:"Red",price:unitPrice,quantity:qty,store:it.store||"",vintage:it.vintage||"",region:it.region||"",grape:it.grape||"",notes:"",rating:0,date:d,kind:"purchase",userId:uid,createdAt:new Date().toISOString()})
       await addBottle({id:mid(),name:it.name||"?",producer:it.producer||"",type:TYPES.find(t=>t.label===it.type)?it.type:"Red",vintage:it.vintage||"",region:it.region||"",price:unitPrice,store:it.store||"",remaining:qty,total:qty,userId:uid,addedAt:new Date().toISOString()})
     }
@@ -272,7 +315,7 @@ export default function App() {
   const doDelete = async id => {
     if(confirm("Delete this entry?")) {
       await deleteEntry(id)
-      setShowDetail(null)
+      setShowDetail(null); setShowEdit(null)
     }
   }
   const doToggleLike = id => { if(uid) toggleReaction(id, uid) }
@@ -284,7 +327,7 @@ export default function App() {
 
   const gL = id => reactions[id]||[]
   const gCm = id => comments[id]||[]
-  const feed = [...entries].filter(e=>feedF==="all"||(feedF==="drinks"&&e.kind==="drink")||(feedF==="purchases"&&e.kind==="purchase")||(feedF==="mine"&&e.userId===uid)).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))
+  const feed = [...entries].filter(e=>feedF==="all"||(feedF==="drinks"&&e.kind==="drink")||(feedF==="purchases"&&e.kind==="purchase")||(feedF==="mine"&&(e.userId===uid||(e.drankWith||[]).includes(uid)))).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))
   const myColl = collection.filter(b=>b.userId===uid)
   const myActive = myColl.filter(b=>b.remaining>0)
   const myEmpty = myColl.filter(b=>b.remaining<=0)
@@ -298,38 +341,17 @@ export default function App() {
       <div style={{fontSize:48,marginBottom:12}}>🍷</div>
       <h1 style={{fontFamily:"'Nunito'",fontSize:32,fontWeight:900,color:"#2D2420",margin:"0 0 4px"}}>Wine Tracker</h1>
       <p style={{fontFamily:"'Nunito'",fontSize:13,color:"#A09890",fontWeight:600,margin:"0 0 24px",letterSpacing:1}}>TRACK &middot; SHARE &middot; SIP</p>
-
       <div style={{width:"100%",maxWidth:320}}>
         <Tabs tabs={[{key:"signin",label:"Sign In"},{key:"signup",label:"Sign Up"}]} active={authMode} onChange={setAuthMode} />
-
         <div style={{marginTop:16,display:"flex",flexDirection:"column",gap:10}}>
-          <div>
-            <label style={fl}>Email</label>
-            <input value={authEmail} onChange={e=>setAuthEmail(e.target.value)} placeholder="you@email.com" type="email" style={fi} />
-          </div>
-          <div>
-            <label style={fl}>Password</label>
-            <input value={authPass} onChange={e=>setAuthPass(e.target.value)} placeholder="Min 6 characters" type="password" onKeyDown={e=>e.key==="Enter"&&authMode==="signin"&&doAuth()} style={fi} />
-          </div>
-
+          <div><label style={fl}>Email</label><input value={authEmail} onChange={e=>setAuthEmail(e.target.value)} placeholder="you@email.com" type="email" style={fi} /></div>
+          <div><label style={fl}>Password</label><input value={authPass} onChange={e=>setAuthPass(e.target.value)} placeholder="Min 6 characters" type="password" onKeyDown={e=>e.key==="Enter"&&authMode==="signin"&&doAuth()} style={fi} /></div>
           {authMode==="signup" && <>
-            <div>
-              <label style={fl}>Display Name</label>
-              <input value={authName} onChange={e=>setAuthName(e.target.value)} placeholder="Your name" onKeyDown={e=>e.key==="Enter"&&doAuth()} style={fi} />
-            </div>
-            <div>
-              <label style={fl}>Avatar</label>
-              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                {AVATARS.map(a=>(<button key={a} onClick={()=>setAuthAvatar(a)} style={{width:38,height:38,borderRadius:12,border:authAvatar===a?"3px solid #C0392B":"2px solid #F5F0EB",background:authAvatar===a?"#C0392B10":"#FFF",fontSize:18,cursor:"pointer"}}>{a}</button>))}
-              </div>
-            </div>
+            <div><label style={fl}>Display Name</label><input value={authName} onChange={e=>setAuthName(e.target.value)} placeholder="Your name" onKeyDown={e=>e.key==="Enter"&&doAuth()} style={fi} /></div>
+            <div><label style={fl}>Avatar</label><div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{AVATARS.map(a=>(<button key={a} onClick={()=>setAuthAvatar(a)} style={{width:38,height:38,borderRadius:12,border:authAvatar===a?"3px solid #C0392B":"2px solid #F5F0EB",background:authAvatar===a?"#C0392B10":"#FFF",fontSize:18,cursor:"pointer"}}>{a}</button>))}</div></div>
           </>}
-
           {authErr&&<p style={{color:"#E74C3C",fontSize:12,fontFamily:"'Nunito'",fontWeight:600,margin:0,textAlign:"center"}}>{authErr}</p>}
-
-          <button onClick={doAuth} disabled={authBusy} style={{...bBtn,background:authBusy?"#F5F0EB":"linear-gradient(135deg,#C0392B,#E74C3C)",color:authBusy?"#C8C0B8":"#FFF",boxShadow:authBusy?"none":"0 4px 20px rgba(192,57,43,0.3)",marginTop:4}}>
-            {authBusy ? "..." : authMode==="signin" ? "Sign In" : "Create Account"} 🚀
-          </button>
+          <button onClick={doAuth} disabled={authBusy} style={{...bBtn,background:authBusy?"#F5F0EB":"linear-gradient(135deg,#C0392B,#E74C3C)",color:authBusy?"#C8C0B8":"#FFF",boxShadow:authBusy?"none":"0 4px 20px rgba(192,57,43,0.3)",marginTop:4}}>{authBusy ? "..." : authMode==="signin" ? "Sign In" : "Create Account"} 🚀</button>
         </div>
       </div>
     </div>
@@ -338,7 +360,6 @@ export default function App() {
   // ═══ MAIN APP ═══
   return (
     <div style={{minHeight:"100vh",background:"#FAFAF8",color:"#2D2420",fontFamily:"'Nunito',sans-serif",maxWidth:520,margin:"0 auto"}}>
-
       {/* Header */}
       <div style={{padding:"16px 16px 12px",background:"#FFF",position:"sticky",top:0,zIndex:100,borderBottom:"1px solid #F5F0EB"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -350,7 +371,7 @@ export default function App() {
             </div>
           </div>
           <div style={{display:"flex",gap:6}}>
-            <button onClick={()=>{setShowDrink(true);setAiErr("")}} style={{...pBtn,background:"linear-gradient(135deg,#C0392B,#E74C3C)"}}>🍷</button>
+            <button onClick={()=>{setShowDrink(true);setAiErr("");setDF(f=>({...f,drankWith:[]}))}} style={{...pBtn,background:"linear-gradient(135deg,#C0392B,#E74C3C)"}}>🍷</button>
             <button onClick={()=>{setShowBuy(true);setAiErr("")}} style={{...pBtn,background:"linear-gradient(135deg,#D4AC0D,#F1C40F)"}}>🛒</button>
             <button onClick={()=>{setShowImport(true);setAiErr("");setParsed([]);setBulkText("");setPastImg(null)}} style={{...pBtn,background:"linear-gradient(135deg,#7D3C98,#9B59B6)"}}>📸</button>
             <button onClick={signOut} style={{...pBtn,background:"#F5F0EB",color:"#A09890",boxShadow:"none",fontSize:13}}>↩</button>
@@ -377,12 +398,30 @@ export default function App() {
           {feed.length===0&&<div style={{textAlign:"center",padding:"48px 20px"}}><p style={{fontFamily:"'Nunito'",fontSize:16,color:"#C8C0B8",fontWeight:700}}>No activity yet ✨</p></div>}
           {feed.map(entry=>{
             const eu=users[entry.userId]; const likes=gL(entry.id); const cmts=gCm(entry.id); const liked=uid&&likes.includes(uid); const exp=expCmts[entry.id]; const isDrink=entry.kind==="drink"; const ts=gt(entry.type); const own=entry.userId===uid
+            const participants = getParticipants(entry)
+            const participantNames = participants.map(pid => (users[pid]||{}).name || "?")
             return <div key={entry.id} style={{background:"#FFF",borderRadius:20,marginBottom:10,boxShadow:"0 2px 12px rgba(0,0,0,0.04)",overflow:"hidden",border:"1px solid #F5F0EB",borderLeft:isDrink?"4px solid #C0392B":"4px solid #D4AC0D"}}>
               <div style={{padding:"14px 16px 10px"}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8}}><Av user={eu} sz={30} /><span style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600}}>{fmtDT(entry.createdAt)}</span><span style={{fontSize:9,fontFamily:"'Nunito'",fontWeight:800,padding:"3px 8px",borderRadius:10,background:isDrink?"#C0392B12":"#D4AC0D12",color:isDrink?"#C0392B":"#D4AC0D"}}>{isDrink?"DRANK":"BOUGHT"}</span></div>
-                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    {isDrink && participants.length > 1
+                      ? <AvatarRow userIds={participants} users={users} sz={28} />
+                      : <Av user={eu} sz={30} showName={false} />
+                    }
+                    <div>
+                      {isDrink && participants.length > 1
+                        ? <span style={{fontSize:12,color:"#2D2420",fontFamily:"'Nunito'",fontWeight:700}}>{participantNames.join(", ")}</span>
+                        : <span style={{fontSize:12,color:"#2D2420",fontFamily:"'Nunito'",fontWeight:700}}>{(eu||{}).name||"?"}</span>
+                      }
+                      <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                        <span style={{fontSize:10,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600}}>{fmtDT(entry.createdAt)}</span>
+                        <span style={{fontSize:9,fontFamily:"'Nunito'",fontWeight:800,padding:"2px 6px",borderRadius:10,background:isDrink?"#C0392B12":"#D4AC0D12",color:isDrink?"#C0392B":"#D4AC0D"}}>{isDrink?"DRANK":"BOUGHT"}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
                     <span style={{fontSize:10,color:ts.color,fontFamily:"'Nunito'",fontWeight:800,background:ts.bg,padding:"4px 10px",borderRadius:20}}>{ts.emoji} {entry.type}</span>
+                    {own&&<button onClick={()=>openEdit(entry)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#D5D0CB",padding:"2px 4px",borderRadius:6,lineHeight:1}} title="Edit">✎</button>}
                     {own&&<button onClick={()=>doDelete(entry.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#D5D0CB",padding:"2px 4px",borderRadius:6,lineHeight:1}} title="Delete">✕</button>}
                   </div>
                 </div>
@@ -432,7 +471,7 @@ export default function App() {
               <span style={{fontSize:10,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:700}}>{b.remaining}/{b.total}</span>
             </div>
           </div>
-          <button onClick={()=>{setShowOpen(b);setONotes("");setORating(0);setOQty(1)}} style={{padding:"10px 16px",borderRadius:14,border:"none",fontSize:12,fontFamily:"'Nunito'",fontWeight:800,cursor:"pointer",background:"linear-gradient(135deg,#C0392B,#E74C3C)",color:"#FFF",whiteSpace:"nowrap"}}>Open 🍷</button>
+          <button onClick={()=>{setShowOpen(b);setONotes("");setORating(0);setOQty(1);setODrankWith([])}} style={{padding:"10px 16px",borderRadius:14,border:"none",fontSize:12,fontFamily:"'Nunito'",fontWeight:800,cursor:"pointer",background:"linear-gradient(135deg,#C0392B,#E74C3C)",color:"#FFF",whiteSpace:"nowrap"}}>Open 🍷</button>
         </div>))}
         {myEmpty.length>0&&<div>
           <p style={{fontFamily:"'Nunito'",fontSize:12,color:"#C8C0B8",fontWeight:700,margin:"20px 0 8px",letterSpacing:1}}>FINISHED</p>
@@ -461,7 +500,17 @@ export default function App() {
         </div>
         {selDay&&dItems(selDay).length>0&&<div style={{marginTop:14}}>
           <p style={{fontFamily:"'Nunito'",fontSize:13,color:"#A09890",fontWeight:700,margin:"0 0 8px"}}>{MONTHS[mo]} {selDay}</p>
-          {dItems(selDay).map(e=>(<div key={e.id} onClick={()=>setShowDetail(e)} style={{background:"#FFF",borderRadius:14,padding:"10px 14px",marginBottom:6,cursor:"pointer",display:"flex",alignItems:"center",gap:10,boxShadow:"0 1px 6px rgba(0,0,0,0.04)",border:"1px solid #F5F0EB"}}><Av user={users[e.userId]} sz={24} showName={false} /><div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:14,fontFamily:"'Nunito'",fontWeight:800,color:"#2D2420",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.name}</p></div><span style={{fontSize:10,color:gt(e.type).color,fontWeight:800}}>{e.kind==="drink"?"🍷":"🛒"}</span></div>))}
+          {dItems(selDay).map(e=>{
+            const participants = getParticipants(e)
+            return <div key={e.id} onClick={()=>setShowDetail(e)} style={{background:"#FFF",borderRadius:14,padding:"10px 14px",marginBottom:6,cursor:"pointer",display:"flex",alignItems:"center",gap:10,boxShadow:"0 1px 6px rgba(0,0,0,0.04)",border:"1px solid #F5F0EB"}}>
+              {e.kind==="drink" && participants.length > 1
+                ? <AvatarRow userIds={participants} users={users} sz={22} />
+                : <Av user={users[e.userId]} sz={24} showName={false} />
+              }
+              <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:14,fontFamily:"'Nunito'",fontWeight:800,color:"#2D2420",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.name}</p></div>
+              <span style={{fontSize:10,color:gt(e.type).color,fontWeight:800}}>{e.kind==="drink"?"🍷":"🛒"}</span>
+            </div>
+          })}
         </div>}
       </div>}
 
@@ -482,16 +531,8 @@ export default function App() {
           const byT={}; filtP.forEach(p=>{byT[p.type]=(byT[p.type]||0)+(p.quantity||1)}); const mx=Math.max(...Object.values(byT),1)
           return <div style={{marginTop:14}}>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-              <div style={{background:"#FFF",borderRadius:16,padding:14,textAlign:"center",boxShadow:"0 2px 10px rgba(0,0,0,0.04)",border:"1px solid #F5F0EB"}}>
-                <p style={{fontSize:9,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1.5,margin:"0 0 4px"}}>PURCHASE $</p>
-                <p style={{fontSize:22,color:"#D4AC0D",fontFamily:"'Nunito'",fontWeight:900,margin:0}}>{fp(purchaseSpent)}</p>
-                <p style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600,margin:"2px 0 0"}}>{btls} bottle{btls!==1?"s":""}</p>
-              </div>
-              <div style={{background:"#FFF",borderRadius:16,padding:14,textAlign:"center",boxShadow:"0 2px 10px rgba(0,0,0,0.04)",border:"1px solid #F5F0EB"}}>
-                <p style={{fontSize:9,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1.5,margin:"0 0 4px"}}>CONSUMED $</p>
-                <p style={{fontSize:22,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:900,margin:0}}>{fp(drinkSpent)}</p>
-                <p style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600,margin:"2px 0 0"}}>{drk} wine{drk!==1?"s":""}</p>
-              </div>
+              <div style={{background:"#FFF",borderRadius:16,padding:14,textAlign:"center",boxShadow:"0 2px 10px rgba(0,0,0,0.04)",border:"1px solid #F5F0EB"}}><p style={{fontSize:9,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1.5,margin:"0 0 4px"}}>PURCHASE $</p><p style={{fontSize:22,color:"#D4AC0D",fontFamily:"'Nunito'",fontWeight:900,margin:0}}>{fp(purchaseSpent)}</p><p style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600,margin:"2px 0 0"}}>{btls} bottle{btls!==1?"s":""}</p></div>
+              <div style={{background:"#FFF",borderRadius:16,padding:14,textAlign:"center",boxShadow:"0 2px 10px rgba(0,0,0,0.04)",border:"1px solid #F5F0EB"}}><p style={{fontSize:9,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1.5,margin:"0 0 4px"}}>CONSUMED $</p><p style={{fontSize:22,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:900,margin:0}}>{fp(drinkSpent)}</p><p style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600,margin:"2px 0 0"}}>{drk} wine{drk!==1?"s":""}</p></div>
             </div>
             {Object.keys(byT).length>0&&<div style={{background:"#FFF",borderRadius:16,padding:14,marginBottom:10,border:"1px solid #F5F0EB"}}>
               <p style={{fontSize:10,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1,margin:"0 0 10px"}}>BY TYPE</p>
@@ -513,14 +554,12 @@ export default function App() {
                 const uBuySpent=entries.filter(e=>e.userId===u.id&&e.kind==="purchase").reduce((s,e)=>s+(e.price||0)*(e.quantity||1),0)
                 const sortVal=lbMode==="drinks"?uDrinks:lbMode==="buys"?uBuys:uDrinkSpent+uBuySpent
                 const display=lbMode==="drinks"?("🍷 "+uDrinks):lbMode==="buys"?("🛒 "+uBuys):fp(uDrinkSpent+uBuySpent)
-                return{...u,sortVal,display,uDrinks,uBuys,uDrinkSpent,uBuySpent}
+                return{...u,sortVal,display}
               }).sort((a,b)=>b.sortVal-a.sortVal).map((u,i)=>(
                 <div key={u.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                   <span style={{fontSize:14,fontFamily:"'Nunito'",fontWeight:900,color:i===0?"#C0392B":i===1?"#D4AC0D":"#B8B0A8",width:18}}>{i+1}</span>
                   <Av user={u} sz={26} />
-                  <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
-                    <span style={{fontSize:13,color:"#2D2420",fontFamily:"'Nunito'",fontWeight:800}}>{u.display}</span>
-                  </div>
+                  <span style={{marginLeft:"auto",fontSize:13,color:"#2D2420",fontFamily:"'Nunito'",fontWeight:800}}>{u.display}</span>
                 </div>
               ))}
             </div>}
@@ -530,7 +569,9 @@ export default function App() {
 
       </div>
 
-      {/* MODALS */}
+      {/* ═══ MODALS ═══ */}
+
+      {/* LOG DRINK */}
       <Modal open={showDrink} onClose={()=>setShowDrink(false)}>
         <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"0 0 12px"}}>Log a Drink 🍷</h3>
         <SmartBar onResult={aiH(setDF)} placeholder="Sassicaia 2018" loading={aiLoad} setLoading={setAiLoad} />
@@ -539,12 +580,14 @@ export default function App() {
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}><div><label style={fl}>Name *</label><input value={dF.name} onChange={e=>setDF(f=>({...f,name:e.target.value}))} style={fi} /></div><div><label style={fl}>Vintage</label><input value={dF.vintage} onChange={e=>setDF(f=>({...f,vintage:e.target.value}))} style={fi} /></div></div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}><div><label style={fl}>Producer</label><input value={dF.producer} onChange={e=>setDF(f=>({...f,producer:e.target.value}))} style={fi} /></div><div><label style={fl}>Region</label><input value={dF.region} onChange={e=>setDF(f=>({...f,region:e.target.value}))} style={fi} /></div></div>
           <div><label style={fl}>Type</label><TypePills value={dF.type} onChange={v=>setDF(f=>({...f,type:v}))} /></div>
+          <BuddyPicker users={users} selected={dF.drankWith} onChange={v=>setDF(f=>({...f,drankWith:v}))} currentUserId={uid} />
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,alignItems:"end"}}><div><label style={fl}>Price</label><input type="number" step="0.01" value={dF.price} onChange={e=>setDF(f=>({...f,price:e.target.value}))} placeholder="$" style={fi} /></div><div><label style={fl}>Date</label><input type="date" value={dF.date} onChange={e=>setDF(f=>({...f,date:e.target.value}))} style={fi} /></div><div><label style={fl}>Rating</label><Stars rating={dF.rating} onRate={r=>setDF(f=>({...f,rating:r}))} size={22} /></div></div>
           <textarea placeholder="Tasting notes..." value={dF.notes} onChange={e=>setDF(f=>({...f,notes:e.target.value}))} rows={2} style={{...fi,resize:"vertical"}} />
           <button onClick={subDrink} disabled={!dF.name.trim()} style={{...bBtn,background:dF.name.trim()?"linear-gradient(135deg,#C0392B,#E74C3C)":"#F5F0EB",color:dF.name.trim()?"#FFF":"#C8C0B8"}}>Log Drink 🍷</button>
         </div>
       </Modal>
 
+      {/* LOG PURCHASE */}
       <Modal open={showBuy} onClose={()=>setShowBuy(false)}>
         <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"0 0 12px"}}>Log a Purchase 🛒</h3>
         <SmartBar onResult={aiH(setPF)} placeholder="Barolo Conterno 2016" loading={aiLoad} setLoading={setAiLoad} />
@@ -559,6 +602,7 @@ export default function App() {
         </div>
       </Modal>
 
+      {/* IMPORT */}
       <Modal open={showImport} onClose={()=>setShowImport(false)}>
         <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"0 0 12px"}}>Import Purchases 📸</h3>
         <div onPaste={handlePaste} tabIndex={0} style={{width:"100%",padding:pastImg?"8px":"16px",borderRadius:16,border:pastImg?"2px solid #C0392B30":"2px dashed #E5E0DA",background:"#F5F0EB",textAlign:"center",marginBottom:10,outline:"none",cursor:"pointer"}}>
@@ -604,6 +648,7 @@ export default function App() {
         </div>}
       </Modal>
 
+      {/* OPEN BOTTLE */}
       <Modal open={!!showOpen} onClose={()=>setShowOpen(null)}>
         {showOpen&&<div style={{textAlign:"center"}}>
           <span style={{fontSize:48}}>{gt(showOpen.type).emoji}</span>
@@ -619,18 +664,50 @@ export default function App() {
               <button onClick={()=>setOQty(Math.min(showOpen.remaining,oQty+1))} style={{width:36,height:36,borderRadius:12,border:"1px solid #F0EBE6",background:"#FFF",fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#8A8078"}}>+</button>
             </div>
           </div>}
-          <div style={{textAlign:"left"}}><label style={fl}>Rating</label></div>
+          <div style={{textAlign:"left"}}><BuddyPicker users={users} selected={oDrankWith} onChange={setODrankWith} currentUserId={uid} /></div>
+          <div style={{textAlign:"left",marginTop:8}}><label style={fl}>Rating</label></div>
           <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><Stars rating={oRating} onRate={setORating} size={28} /></div>
           <textarea placeholder="Quick tasting notes..." value={oNotes} onChange={e=>setONotes(e.target.value)} rows={2} style={{...fi,resize:"vertical",marginBottom:10}} />
           <button onClick={doOpenBottle} style={{...bBtn,background:"linear-gradient(135deg,#C0392B,#E74C3C)",color:"#FFF"}}>Open {oQty>1?oQty+" Bottles":"Bottle"} 🍷</button>
         </div>}
       </Modal>
 
+      {/* EDIT ENTRY */}
+      <Modal open={!!showEdit} onClose={()=>{setShowEdit(null);setEF(null)}}>
+        {eF&&<div>
+          <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"0 0 12px"}}>Edit {eF.kind==="drink"?"Drink 🍷":"Purchase 🛒"}</h3>
+          {eF.kind==="drink" && <SmartBar onResult={aiH(setEF)} placeholder="AI lookup..." loading={aiLoad} setLoading={setAiLoad} />}
+          {aiErr&&<p style={{color:"#E74C3C",fontSize:11,margin:"6px 0",fontFamily:"'Nunito'",fontWeight:600}}>{aiErr}</p>}
+          <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:8}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}><div><label style={fl}>Name *</label><input value={eF.name} onChange={e=>setEF(f=>({...f,name:e.target.value}))} style={fi} /></div><div><label style={fl}>Vintage</label><input value={eF.vintage} onChange={e=>setEF(f=>({...f,vintage:e.target.value}))} style={fi} /></div></div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}><div><label style={fl}>Producer</label><input value={eF.producer} onChange={e=>setEF(f=>({...f,producer:e.target.value}))} style={fi} /></div><div><label style={fl}>Region</label><input value={eF.region} onChange={e=>setEF(f=>({...f,region:e.target.value}))} style={fi} /></div></div>
+            <div><label style={fl}>Type</label><TypePills value={eF.type} onChange={v=>setEF(f=>({...f,type:v}))} /></div>
+            {eF.kind==="drink"&&<BuddyPicker users={users} selected={eF.drankWith} onChange={v=>setEF(f=>({...f,drankWith:v}))} currentUserId={uid} />}
+            {eF.kind==="drink"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,alignItems:"end"}}><div><label style={fl}>Price</label><input type="number" step="0.01" value={eF.price} onChange={e=>setEF(f=>({...f,price:e.target.value}))} style={fi} /></div><div><label style={fl}>Date</label><input type="date" value={eF.date} onChange={e=>setEF(f=>({...f,date:e.target.value}))} style={fi} /></div><div><label style={fl}>Rating</label><Stars rating={eF.rating} onRate={r=>setEF(f=>({...f,rating:r}))} size={22} /></div></div>}
+            {eF.kind==="drink"&&<textarea placeholder="Tasting notes..." value={eF.notes} onChange={e=>setEF(f=>({...f,notes:e.target.value}))} rows={2} style={{...fi,resize:"vertical"}} />}
+            {eF.kind==="purchase"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}><div><label style={fl}>Price</label><input type="number" step="0.01" value={eF.price} onChange={e=>setEF(f=>({...f,price:e.target.value}))} style={fi} /></div><div><label style={fl}>Qty</label><input type="number" min="1" value={eF.quantity} onChange={e=>setEF(f=>({...f,quantity:e.target.value}))} style={fi} /></div><div><label style={fl}>Store</label><input value={eF.store} onChange={e=>setEF(f=>({...f,store:e.target.value}))} style={fi} /></div></div>}
+            {eF.kind==="purchase"&&<div><label style={fl}>Date</label><input type="date" value={eF.date} onChange={e=>setEF(f=>({...f,date:e.target.value}))} style={fi} /></div>}
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={subEdit} disabled={!eF.name.trim()} style={{...bBtn,flex:1,background:eF.name.trim()?"linear-gradient(135deg,#C0392B,#E74C3C)":"#F5F0EB",color:eF.name.trim()?"#FFF":"#C8C0B8"}}>Save Changes</button>
+              <button onClick={()=>doDelete(eF.id)} style={{...bBtn,flex:0,padding:"14px 20px",background:"#FFF",color:"#C0392B",border:"2px solid #C0392B30"}}>🗑</button>
+            </div>
+          </div>
+        </div>}
+      </Modal>
+
+      {/* DETAIL */}
       <Modal open={!!showDetail} onClose={()=>setShowDetail(null)}>
         {showDetail&&(()=>{
           const eu=users[showDetail.userId]; const isDrink=showDetail.kind==="drink"; const own=showDetail.userId===uid
+          const participants = getParticipants(showDetail)
           return <div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}><Av user={eu} sz={26} /><span style={{fontSize:11,color:gt(showDetail.type).color,fontFamily:"'Nunito'",fontWeight:800,background:gt(showDetail.type).bg,padding:"4px 10px",borderRadius:20}}>{gt(showDetail.type).emoji} {showDetail.type}</span></div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              {isDrink && participants.length > 1
+                ? <div style={{display:"flex",alignItems:"center",gap:8}}><AvatarRow userIds={participants} users={users} sz={26} /><span style={{fontSize:12,fontFamily:"'Nunito'",fontWeight:700,color:"#2D2420"}}>{participants.map(pid=>(users[pid]||{}).name||"?").join(", ")}</span></div>
+                : <Av user={eu} sz={26} />
+              }
+              <span style={{fontSize:11,color:gt(showDetail.type).color,fontFamily:"'Nunito'",fontWeight:800,background:gt(showDetail.type).bg,padding:"4px 10px",borderRadius:20}}>{gt(showDetail.type).emoji} {showDetail.type}</span>
+            </div>
             <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"4px 0"}}>{showDetail.name}</h3>
             {showDetail.producer&&<p style={{margin:"4px 0",fontSize:13,color:"#8A8078",fontFamily:"'Nunito'",fontWeight:600}}>{showDetail.producer}</p>}
             {isDrink&&showDetail.rating>0&&<div style={{marginBottom:6}}><Stars rating={showDetail.rating} size={16} /></div>}
@@ -638,7 +715,7 @@ export default function App() {
             {showDetail.price!=null&&<p style={{fontSize:18,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:900,margin:"6px 0"}}>{fp(showDetail.price)}</p>}
             <div style={{display:"flex",gap:6,marginTop:8}}>
               <button onClick={()=>setShowDetail(null)} style={{...bBtn,flex:1,background:"#F5F0EB",color:"#8A8078"}}>Close</button>
-              {own&&<button onClick={()=>doDelete(showDetail.id)} style={{...bBtn,flex:1,background:"#FFF",color:"#C0392B",border:"2px solid #C0392B30"}}>Delete</button>}
+              {own&&<button onClick={()=>{setShowDetail(null);openEdit(showDetail)}} style={{...bBtn,flex:1,background:"#FFF",color:"#C0392B",border:"2px solid #C0392B30"}}>Edit</button>}
             </div>
           </div>
         })()}

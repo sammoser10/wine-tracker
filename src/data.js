@@ -85,6 +85,7 @@ export function useWineData() {
         producer: e.producer, region: e.region, grape: e.grape, vintage: e.vintage,
         notes: e.notes, rating: e.rating, price: e.price, quantity: e.quantity,
         store: e.store, date: e.date, fromCollection: e.from_collection, createdAt: e.created_at,
+        drankWith: e.drank_with || [],
       })))
 
       setCollection((cRes.data || []).map(c => ({
@@ -137,13 +138,31 @@ export async function addEntry(entry) {
     grape: entry.grape || '', vintage: entry.vintage || '', notes: entry.notes || '',
     rating: entry.rating || 0, price: entry.price, quantity: entry.quantity || 1,
     store: entry.store || '', date: entry.date, from_collection: entry.fromCollection || null,
-    created_at: entry.createdAt,
+    created_at: entry.createdAt, drank_with: entry.drankWith || [],
   })
   if (error) console.error('addEntry error:', error)
 }
 
+export async function updateEntry(id, fields) {
+  const mapped = {}
+  if (fields.name !== undefined) mapped.name = fields.name
+  if (fields.type !== undefined) mapped.type = fields.type
+  if (fields.producer !== undefined) mapped.producer = fields.producer
+  if (fields.region !== undefined) mapped.region = fields.region
+  if (fields.grape !== undefined) mapped.grape = fields.grape
+  if (fields.vintage !== undefined) mapped.vintage = fields.vintage
+  if (fields.notes !== undefined) mapped.notes = fields.notes
+  if (fields.rating !== undefined) mapped.rating = fields.rating
+  if (fields.price !== undefined) mapped.price = fields.price
+  if (fields.quantity !== undefined) mapped.quantity = fields.quantity
+  if (fields.store !== undefined) mapped.store = fields.store
+  if (fields.date !== undefined) mapped.date = fields.date
+  if (fields.drankWith !== undefined) mapped.drank_with = fields.drankWith
+  const { error } = await supabase.from('wt_entries').update(mapped).eq('id', id)
+  if (error) console.error('updateEntry error:', error)
+}
+
 export async function deleteEntry(id) {
-  // Delete reactions and comments first, then the entry
   await supabase.from('wt_reactions').delete().eq('entry_id', id)
   await supabase.from('wt_comments').delete().eq('entry_id', id)
   const { error } = await supabase.from('wt_entries').delete().eq('id', id)
