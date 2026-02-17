@@ -1,0 +1,477 @@
+import React, { useState } from 'react'
+import { useWineData, useCurrentUser, addEntry, deleteEntry, addBottle, decrementBottle, toggleReaction, addComment as postComment } from './data'
+
+const TYPES = [
+  { label: "Red", color: "#C0392B", bg: "#C0392B15", emoji: "🍷" },
+  { label: "White", color: "#D4AC0D", bg: "#D4AC0D15", emoji: "🥂" },
+  { label: "Rosé", color: "#E74C8B", bg: "#E74C8B15", emoji: "🌸" },
+  { label: "Orange", color: "#E67E22", bg: "#E67E2215", emoji: "🍊" },
+  { label: "Sparkling", color: "#7D3C98", bg: "#7D3C9815", emoji: "🍾" },
+  { label: "Dessert", color: "#784212", bg: "#78421215", emoji: "🍯" },
+]
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"]
+const DL = ["S","M","T","W","T","F","S"]
+const AVATARS = ["🍷","🍇","🥂","🍾","🌿","🔥","💎","🦊","🌊","☀️","🌙","🫧","🧊","🪩","💜","🖤"]
+
+const gt = t => TYPES.find(x => x.label === t) || TYPES[0]
+const fp = n => n != null ? "$" + Number(n).toFixed(2) : ""
+const ti = () => { const t = new Date(); return t.getFullYear() + "-" + String(t.getMonth()+1).padStart(2,"0") + "-" + String(t.getDate()).padStart(2,"0") }
+const mid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
+const fmtDT = iso => { try { return new Date(iso).toLocaleString(undefined, { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }) } catch { return iso } }
+
+const ANTHROPIC_URL = "/api/anthropic"
+
+async function aiWine(text) {
+  const r = await fetch(ANTHROPIC_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, system:'Wine expert. Return ONLY JSON: {"name":"","producer":"","region":"","country":"","type":"Red|White|Rosé|Orange|Sparkling|Dessert","vintage":"","grape":""}', messages:[{role:"user",content:text}] }) })
+  const d = await r.json(); return JSON.parse((d.content||[]).map(c=>c.text||"").join("").replace(/```json|```/g,"").trim())
+}
+async function aiBulk(text) {
+  const r = await fetch(ANTHROPIC_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, system:'Extract wines. Return ONLY JSON array: [{"name":"","producer":"","type":"Red|White|Rosé|Orange|Sparkling|Dessert","price":null,"quantity":1,"store":"","vintage":""}]', messages:[{role:"user",content:text}] }) })
+  const d = await r.json(); return JSON.parse((d.content||[]).map(c=>c.text||"").join("").replace(/```json|```/g,"").trim())
+}
+async function aiReceipt(b64, mt) {
+  const r = await fetch(ANTHROPIC_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, system:'Extract wines from receipt image. Return ONLY JSON array: [{"name":"","producer":"","type":"Red|White|Rosé|Orange|Sparkling|Dessert","price":null,"quantity":1,"store":"","vintage":""}]', messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:mt,data:b64}},{type:"text",text:"Extract wine purchases."}]}] }) })
+  if(!r.ok) throw new Error("API "+r.status); const d = await r.json(); if(d.error) throw new Error(d.error.message)
+  return JSON.parse((d.content||[]).map(c=>c.text||"").join("").replace(/```json|```/g,"").trim())
+}
+
+// ── Small components ──
+function Stars({rating, onRate, size}) {
+  return <div style={{display:"flex",gap:1}}>{[1,2,3,4,5].map(i=><span key={i} onClick={()=>onRate&&onRate(i)} style={{cursor:onRate?"pointer":"default",fontSize:size||16,color:i<=rating?"#E67E22":"#E5E0DA",userSelect:"none"}}>{"\u2605"}</span>)}</div>
+}
+function Modal({open, onClose, children}) {
+  if(!open) return null
+  return <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(0,0,0,0.3)",backdropFilter:"blur(8px)",display:"flex",alignItems:"flex-end",justifyContent:"center",animation:"fadeIn 0.2s"}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:"#FFF",borderRadius:"24px 24px 0 0",padding:"8px 20px 28px",width:"100%",maxWidth:520,maxHeight:"88vh",overflowY:"auto",boxShadow:"0 -8px 40px rgba(0,0,0,0.12)",animation:"sheetUp 0.3s ease"}}>
+      <div style={{width:36,height:4,borderRadius:2,background:"#E5E0DA",margin:"4px auto 16px"}} />
+      {children}
+    </div>
+  </div>
+}
+function Tabs({tabs, active, onChange}) {
+  return <div style={{display:"flex",gap:4,background:"#F5F0EB",borderRadius:14,padding:3}}>
+    {tabs.map(t=><button key={t.key} onClick={()=>onChange(t.key)} style={{flex:1,padding:"8px 4px",borderRadius:12,border:"none",fontSize:12,fontFamily:"'Nunito'",fontWeight:active===t.key?800:600,cursor:"pointer",background:active===t.key?"#FFF":"transparent",color:active===t.key?"#2D2420":"#A09890",boxShadow:active===t.key?"0 2px 8px rgba(0,0,0,0.06)":"none",transition:"all 0.2s"}}>{t.label}</button>)}
+  </div>
+}
+function SmartBar({onResult, placeholder, loading, setLoading}) {
+  const [text, setText] = useState("")
+  const go = async () => { if(!text.trim()||loading) return; setLoading(true); try { onResult(await aiWine(text)); setText("") } catch { onResult(null,"Couldn't parse") } setLoading(false) }
+  return <div style={{display:"flex",gap:6}}>
+    <input value={text} onChange={e=>setText(e.target.value)} placeholder={placeholder} onKeyDown={e=>e.key==="Enter"&&go()} style={{flex:1,fontSize:14,borderRadius:14,padding:"12px 16px",background:"#F5F0EB",border:"none",outline:"none",fontFamily:"'Nunito'",fontWeight:600,color:"#2D2420",width:"100%"}} />
+    <button onClick={go} disabled={loading||!text.trim()} style={{width:44,height:44,borderRadius:14,border:"none",fontSize:18,cursor:"pointer",background:text.trim()?"#C0392B":"#F5F0EB",color:text.trim()?"#FFF":"#C8C0B8",display:"flex",alignItems:"center",justifyContent:"center"}}>{loading?"...":"\u2192"}</button>
+  </div>
+}
+function Av({user, sz, showName}) {
+  if(!user) return null; const size=sz||32
+  return <div style={{display:"flex",alignItems:"center",gap:6}}>
+    <div style={{width:size,height:size,borderRadius:"50%",background:"linear-gradient(135deg,#F5F0EB,#E5E0DA)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*0.5,flexShrink:0,boxShadow:"0 2px 6px rgba(0,0,0,0.06)"}}>{user.avatar||"🍷"}</div>
+    {showName!==false&&<span style={{fontSize:13,color:"#2D2420",fontFamily:"'Nunito'",fontWeight:700}}>{user.name}</span>}
+  </div>
+}
+function TypePills({value, onChange}) {
+  return <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+    {TYPES.map(t=><button key={t.label} onClick={()=>onChange(t.label)} style={{padding:"6px 12px",borderRadius:20,fontSize:11,fontFamily:"'Nunito'",cursor:"pointer",border:"none",fontWeight:value===t.label?800:600,background:value===t.label?t.color:"#F5F0EB",color:value===t.label?"#FFF":"#8A8078",transition:"all 0.2s"}}>{t.emoji} {t.label}</button>)}
+  </div>
+}
+
+const fi = { width:"100%", padding:"10px 14px", borderRadius:12, border:"1px solid #F0EBE6", background:"#F5F0EB", color:"#2D2420", fontSize:13, outline:"none", fontFamily:"'Nunito'", fontWeight:600 }
+const fl = { fontSize:9, color:"#B8B0A8", fontFamily:"'Nunito'", fontWeight:800, letterSpacing:1.5, textTransform:"uppercase", display:"block", marginBottom:3 }
+const bBtn = { width:"100%", padding:"14px", borderRadius:16, border:"none", fontSize:14, fontFamily:"'Nunito'", fontWeight:900, cursor:"pointer", transition:"all 0.2s" }
+const pBtn = { width:40, height:40, borderRadius:14, border:"none", fontSize:17, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:"#FFF", boxShadow:"0 3px 12px rgba(0,0,0,0.1)" }
+const sBtn = { background:"none", border:"none", cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", padding:"4px 8px", borderRadius:8, fontFamily:"'Nunito'" }
+
+export default function App() {
+  const { user, createUser } = useCurrentUser()
+  const { users, entries, collection, reactions, comments, loading } = useWineData()
+
+  const [tab, setTab] = useState("feed")
+  const [curDate, setCurDate] = useState(new Date())
+  const [selDay, setSelDay] = useState(null)
+  const [showDrink, setShowDrink] = useState(false)
+  const [showBuy, setShowBuy] = useState(false)
+  const [showImport, setShowImport] = useState(false)
+  const [showDetail, setShowDetail] = useState(null)
+  const [showOpen, setShowOpen] = useState(null)
+  const [aiLoad, setAiLoad] = useState(false)
+  const [aiErr, setAiErr] = useState("")
+  const [parsed, setParsed] = useState([])
+  const [proc, setProc] = useState(false)
+  const [cmtText, setCmtText] = useState({})
+  const [expCmts, setExpCmts] = useState({})
+  const [statsR, setStatsR] = useState("month")
+  const [feedF, setFeedF] = useState("all")
+  const [bulkText, setBulkText] = useState("")
+  const [pastImg, setPastImg] = useState(null)
+  const [dF, setDF] = useState({name:"",type:"Red",producer:"",region:"",grape:"",vintage:"",notes:"",rating:0,date:""})
+  const [pF, setPF] = useState({name:"",type:"Red",producer:"",region:"",price:"",quantity:"1",store:"",vintage:"",date:""})
+  const [oNotes, setONotes] = useState("")
+  const [oRating, setORating] = useState(0)
+  const [sName, setSName] = useState("")
+  const [sAv, setSAv] = useState("🍷")
+
+  const yr = curDate.getFullYear()
+  const mo = curDate.getMonth()
+  const now = new Date()
+
+  const doSetup = async () => { if(!sName.trim()) return; await createUser(sName.trim(), sAv) }
+
+  // Calendar
+  const fDay = new Date(yr,mo,1).getDay()
+  const dim = new Date(yr,mo+1,0).getDate()
+  const cDays = []
+  for(let i=0;i<fDay;i++) cDays.push(null)
+  for(let i=1;i<=dim;i++) cDays.push(i)
+  while(cDays.length%7) cDays.push(null)
+  const ds = d => yr+"-"+String(mo+1).padStart(2,"0")+"-"+String(d).padStart(2,"0")
+  const dItems = d => d ? entries.filter(e=>e.date===ds(d)) : []
+
+  const aiH = setter => (result, err) => {
+    if(err){setAiErr(err);return} setAiErr("")
+    setter(f=>({...f,name:result.name||f.name,producer:result.producer||f.producer,region:[result.region,result.country].filter(Boolean).join(", ")||f.region,type:TYPES.find(t=>t.label===result.type)?result.type:f.type,grape:result.grape||f.grape,vintage:result.vintage||f.vintage}))
+  }
+
+  const subDrink = async () => {
+    if(!dF.name.trim()||!user) return
+    const d = dF.date||(selDay?ds(selDay):ti())
+    const entry = {id:mid(),...dF,date:d,kind:"drink",userId:user.id,createdAt:new Date().toISOString()}
+    await addEntry(entry)
+    setDF({name:"",type:"Red",producer:"",region:"",grape:"",vintage:"",notes:"",rating:0,date:""}); setShowDrink(false)
+  }
+
+  const subBuy = async () => {
+    if(!pF.name.trim()||!user) return
+    const d=pF.date||ti(); const qty=parseInt(pF.quantity)||1; const price=pF.price?parseFloat(pF.price):null
+    const entry = {id:mid(),...pF,date:d,kind:"purchase",userId:user.id,price,quantity:qty,createdAt:new Date().toISOString()}
+    await addEntry(entry)
+    const bottle = {id:mid(),name:pF.name,producer:pF.producer,type:pF.type,vintage:pF.vintage,region:pF.region||"",price,store:pF.store,remaining:qty,total:qty,userId:user.id,addedAt:new Date().toISOString()}
+    await addBottle(bottle)
+    setPF({name:"",type:"Red",producer:"",region:"",price:"",quantity:"1",store:"",vintage:"",date:""}); setShowBuy(false)
+  }
+
+  const doOpenBottle = async () => {
+    if(!showOpen||!user) return
+    const b = showOpen
+    const drinkEntry = {id:mid(),name:b.name,producer:b.producer,type:b.type,vintage:b.vintage,region:b.region,grape:"",notes:oNotes,rating:oRating,date:ti(),kind:"drink",userId:user.id,createdAt:new Date().toISOString(),fromCollection:b.id}
+    await addEntry(drinkEntry)
+    await decrementBottle(b.id)
+    setShowOpen(null); setONotes(""); setORating(0)
+  }
+
+  const handlePaste = async (e) => {
+    const items = e.clipboardData && e.clipboardData.items
+    if(!items) return
+    for(let i=0;i<items.length;i++) {
+      if(items[i].type && items[i].type.startsWith("image/")) {
+        e.preventDefault()
+        const file = items[i].getAsFile()
+        if(!file) return
+        try {
+          const dataUrl = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(file)})
+          const resized = await new Promise((res,rej)=>{
+            const img=new Image(); img.onload=()=>{let w=img.width,h=img.height;const m=1024;if(w>m||h>m){const s=m/Math.max(w,h);w=Math.round(w*s);h=Math.round(h*s)}const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);const o=c.toDataURL("image/jpeg",0.7);res({base64:o.split(",")[1],mediaType:"image/jpeg",preview:o})}; img.onerror=rej; img.src=dataUrl
+          })
+          setPastImg(resized); setAiErr("")
+        } catch { setAiErr("Failed to process image") }
+        return
+      }
+    }
+  }
+
+  const parseImg = async () => {
+    if(!pastImg||proc) return; setProc(true); setParsed([]); setAiErr("")
+    try { const items=await aiReceipt(pastImg.base64,pastImg.mediaType); if(!Array.isArray(items)||!items.length) setAiErr("No wines found"); else setParsed(items.map(it=>({...it,selected:true}))) }
+    catch(e) { setAiErr("Error: "+(e.message||"Unknown")) } setProc(false)
+  }
+  const parseTxt = async () => {
+    if(!bulkText.trim()||proc) return; setProc(true); setParsed([]); setAiErr("")
+    try { const items=await aiBulk(bulkText); setParsed(Array.isArray(items)?items.map(it=>({...it,selected:true})):[]); }
+    catch { setAiErr("Couldn't parse text") } setProc(false)
+  }
+  const doImport = async () => {
+    if(!user) return; const d=ti(); const sel=parsed.filter(i=>i.selected)
+    for(const it of sel) {
+      const eid=mid(); const bid=mid()
+      await addEntry({id:eid,name:it.name||"?",producer:it.producer||"",type:TYPES.find(t=>t.label===it.type)?it.type:"Red",price:it.price||null,quantity:it.quantity||1,store:it.store||"",vintage:it.vintage||"",region:"",grape:"",notes:"",rating:0,date:d,kind:"purchase",userId:user.id,createdAt:new Date().toISOString()})
+      await addBottle({id:bid,name:it.name||"?",producer:it.producer||"",type:TYPES.find(t=>t.label===it.type)?it.type:"Red",vintage:it.vintage||"",region:"",price:it.price||null,store:it.store||"",remaining:it.quantity||1,total:it.quantity||1,userId:user.id,addedAt:new Date().toISOString()})
+    }
+    setParsed([]); setShowImport(false); setBulkText(""); setPastImg(null)
+  }
+
+  const doDelete = async id => { await deleteEntry(id); setShowDetail(null) }
+  const doToggleLike = id => { if(user) toggleReaction(id, user.id) }
+  const doAddCmt = id => {
+    if(!user||!(cmtText[id]||"").trim()) return
+    postComment(id, user.id, cmtText[id].trim())
+    setCmtText(p=>({...p,[id]:""}))
+  }
+
+  const gL = id => reactions[id]||[]
+  const gCm = id => comments[id]||[]
+  const feed = [...entries].filter(e=>feedF==="all"||(feedF==="drinks"&&e.kind==="drink")||(feedF==="purchases"&&e.kind==="purchase")||(feedF==="mine"&&e.userId===(user&&user.id))).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))
+  const myColl = collection.filter(b=>b.userId===(user&&user.id))
+  const myActive = myColl.filter(b=>b.remaining>0)
+  const myEmpty = myColl.filter(b=>b.remaining<=0)
+
+  // ═══ RENDER ═══
+  if(loading) return <div style={{minHeight:"100vh",background:"#FAFAF8",display:"flex",alignItems:"center",justifyContent:"center"}}><p style={{color:"#A09890",fontFamily:"'Nunito'",fontSize:16,fontWeight:700}}>Loading...</p></div>
+
+  if(!user) return (
+    <div style={{minHeight:"100vh",background:"#FAFAF8",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32}}>
+      <div style={{fontSize:48,marginBottom:12}}>🍷</div>
+      <h1 style={{fontFamily:"'Nunito'",fontSize:32,fontWeight:900,color:"#2D2420",margin:"0 0 4px"}}>Wine Tracker</h1>
+      <p style={{fontFamily:"'Nunito'",fontSize:13,color:"#A09890",fontWeight:600,margin:"0 0 36px",letterSpacing:1}}>TRACK &middot; SHARE &middot; SIP</p>
+      <div style={{width:"100%",maxWidth:300}}>
+        <input value={sName} onChange={e=>setSName(e.target.value)} placeholder="Your name" onKeyDown={e=>e.key==="Enter"&&doSetup()} autoFocus style={{width:"100%",marginBottom:16,fontSize:17,padding:"14px 18px",borderRadius:16,background:"#F5F0EB",border:"2px solid transparent",fontWeight:700,textAlign:"center",outline:"none",fontFamily:"'Nunito'",color:"#2D2420"}} />
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center",marginBottom:24}}>
+          {AVATARS.map(a=>(<button key={a} onClick={()=>setSAv(a)} style={{width:42,height:42,borderRadius:14,border:sAv===a?"3px solid #C0392B":"2px solid #F5F0EB",background:sAv===a?"#C0392B10":"#FFF",fontSize:20,cursor:"pointer"}}>{a}</button>))}
+        </div>
+        <button onClick={doSetup} disabled={!sName.trim()} style={{...bBtn,background:sName.trim()?"linear-gradient(135deg,#C0392B,#E74C3C)":"#F5F0EB",color:sName.trim()?"#FFF":"#C8C0B8",boxShadow:sName.trim()?"0 4px 20px rgba(192,57,43,0.3)":"none"}}>Let's Go 🚀</button>
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{minHeight:"100vh",background:"#FAFAF8",color:"#2D2420",fontFamily:"'Nunito',sans-serif",maxWidth:520,margin:"0 auto"}}>
+
+      {/* Header */}
+      <div style={{padding:"16px 16px 12px",background:"#FFF",position:"sticky",top:0,zIndex:100,borderBottom:"1px solid #F5F0EB"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <Av user={user} sz={34} showName={false} />
+            <div>
+              <h1 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:0}}>Wine Tracker 🍷</h1>
+              <p style={{fontFamily:"'Nunito'",fontSize:10,color:"#B8B0A8",fontWeight:700,margin:0,letterSpacing:1}}>{Object.keys(users).length} MEMBERS</p>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>{setShowDrink(true);setAiErr("")}} style={{...pBtn,background:"linear-gradient(135deg,#C0392B,#E74C3C)"}}>🍷</button>
+            <button onClick={()=>{setShowBuy(true);setAiErr("")}} style={{...pBtn,background:"linear-gradient(135deg,#D4AC0D,#F1C40F)"}}>🛒</button>
+            <button onClick={()=>{setShowImport(true);setAiErr("");setParsed([]);setBulkText("");setPastImg(null)}} style={{...pBtn,background:"linear-gradient(135deg,#7D3C98,#9B59B6)"}}>📸</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom tabs */}
+      <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:100,background:"#FFF",borderTop:"1px solid #F0EBE6",display:"flex",maxWidth:520,margin:"0 auto",padding:"6px 8px 12px"}}>
+        {[{k:"feed",i:"🏠",l:"Feed"},{k:"collection",i:"🗄️",l:"Cellar"},{k:"calendar",i:"📅",l:"Calendar"},{k:"stats",i:"📊",l:"Stats"}].map(t=>(
+          <button key={t.k} onClick={()=>setTab(t.k)} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2,padding:"6px 0",border:"none",background:"none",cursor:"pointer"}}>
+            <span style={{fontSize:20,transform:tab===t.k?"scale(1.2)":"scale(1)",transition:"transform 0.2s"}}>{t.i}</span>
+            <span style={{fontSize:9,fontFamily:"'Nunito'",fontWeight:tab===t.k?900:600,color:tab===t.k?"#C0392B":"#B8B0A8"}}>{t.l}</span>
+          </button>
+        ))}
+      </div>
+
+      <div style={{paddingBottom:80}}>
+
+      {/* FEED */}
+      {tab==="feed" && <div style={{padding:"12px 16px"}}>
+        <Tabs tabs={[{key:"all",label:"All"},{key:"drinks",label:"Drinks"},{key:"purchases",label:"Buys"},{key:"mine",label:"Mine"}]} active={feedF} onChange={setFeedF} />
+        <div style={{marginTop:12}}>
+          {feed.length===0&&<div style={{textAlign:"center",padding:"48px 20px"}}><p style={{fontFamily:"'Nunito'",fontSize:16,color:"#C8C0B8",fontWeight:700}}>No activity yet ✨</p></div>}
+          {feed.map(entry=>{
+            const eu=users[entry.userId]; const likes=gL(entry.id); const cmts=gCm(entry.id); const liked=user&&likes.includes(user.id); const exp=expCmts[entry.id]; const isDrink=entry.kind==="drink"; const ts=gt(entry.type)
+            return <div key={entry.id} style={{background:"#FFF",borderRadius:20,marginBottom:10,boxShadow:"0 2px 12px rgba(0,0,0,0.04)",overflow:"hidden",border:"1px solid #F5F0EB",borderLeft:isDrink?"4px solid #C0392B":"4px solid #D4AC0D"}}>
+              <div style={{padding:"14px 16px 10px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}><Av user={eu} sz={30} /><span style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600}}>{fmtDT(entry.createdAt)}</span><span style={{fontSize:9,fontFamily:"'Nunito'",fontWeight:800,padding:"3px 8px",borderRadius:10,background:isDrink?"#C0392B12":"#D4AC0D12",color:isDrink?"#C0392B":"#D4AC0D"}}>{isDrink?"DRANK":"BOUGHT"}</span></div>
+                  <span style={{fontSize:10,color:ts.color,fontFamily:"'Nunito'",fontWeight:800,background:ts.bg,padding:"4px 10px",borderRadius:20}}>{ts.emoji} {entry.type}</span>
+                </div>
+                <p style={{margin:"0 0 2px",fontSize:18,fontFamily:"'Nunito'",fontWeight:900,color:"#2D2420"}}>{entry.name}{entry.vintage?<span style={{color:"#B8B0A8",fontWeight:600}}>{" '"+entry.vintage.slice(-2)}</span>:""}</p>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {entry.producer&&<span style={{fontSize:12,color:"#8A8078",fontFamily:"'Nunito'",fontWeight:600}}>{entry.producer}</span>}
+                  {entry.region&&<span style={{fontSize:12,color:"#A09890",fontFamily:"'Nunito'",fontStyle:"italic"}}>{entry.region}</span>}
+                </div>
+                {isDrink&&entry.rating>0&&<div style={{margin:"6px 0"}}><Stars rating={entry.rating} size={14} /></div>}
+                {isDrink&&entry.notes&&<p style={{margin:"6px 0 0",fontSize:13,color:"#6D6259",fontFamily:"'Nunito'",fontWeight:500,lineHeight:1.5}}>{entry.notes}</p>}
+                {!isDrink&&<div style={{display:"flex",gap:10,marginTop:6,alignItems:"center"}}>
+                  {entry.price!=null&&<span style={{fontSize:16,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:900}}>{fp(entry.price)}</span>}
+                  {entry.quantity>1&&<span style={{fontSize:12,color:"#A09890",fontFamily:"'Nunito'",fontWeight:700}}>x{entry.quantity}</span>}
+                  {entry.store&&<span style={{fontSize:11,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:600}}>{entry.store}</span>}
+                </div>}
+              </div>
+              <div style={{display:"flex",alignItems:"center",padding:"8px 16px 10px",gap:4,borderTop:"1px solid #F5F0EB"}}>
+                <button onClick={()=>doToggleLike(entry.id)} style={{...sBtn,color:liked?"#E74C3C":"#C8C0B8"}}>{liked?"\u2665":"\u2661"}{likes.length>0&&<span style={{marginLeft:3,fontSize:12,color:"#A09890",fontWeight:700}}>{likes.length}</span>}</button>
+                <button onClick={()=>setExpCmts(p=>({...p,[entry.id]:!p[entry.id]}))} style={{...sBtn,color:"#C8C0B8"}}>💬{cmts.length>0&&<span style={{marginLeft:3,fontSize:12,color:"#A09890",fontWeight:700}}>{cmts.length}</span>}</button>
+                {likes.length>0&&<div style={{display:"flex",marginLeft:"auto"}}>{likes.slice(0,4).map((u2,j)=>(<div key={u2} style={{width:22,height:22,borderRadius:"50%",background:"#F5F0EB",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,border:"2px solid #FFF",marginLeft:j>0?-6:0,zIndex:5-j}}>{(users[u2]||{}).avatar||"🍷"}</div>))}</div>}
+              </div>
+              {exp&&<div style={{padding:"0 16px 12px"}}>
+                {cmts.map(c=>(<div key={c.id} style={{display:"flex",gap:8,marginBottom:8}}><Av user={users[c.userId]} sz={22} showName={false} /><div><div style={{display:"flex",gap:4,alignItems:"baseline"}}><span style={{fontSize:12,color:"#2D2420",fontFamily:"'Nunito'",fontWeight:700}}>{(users[c.userId]||{}).name||"?"}</span><span style={{fontSize:10,color:"#C8C0B8"}}>{fmtDT(c.createdAt)}</span></div><p style={{margin:"1px 0 0",fontSize:13,color:"#6D6259",fontFamily:"'Nunito'",fontWeight:500}}>{c.text}</p></div></div>))}
+                <div style={{display:"flex",gap:6}}>
+                  <input value={cmtText[entry.id]||""} onChange={e=>setCmtText(p=>({...p,[entry.id]:e.target.value}))} placeholder="Comment..." onKeyDown={e=>e.key==="Enter"&&doAddCmt(entry.id)} style={{flex:1,fontSize:13,padding:"8px 12px",borderRadius:14,background:"#F5F0EB",border:"none",outline:"none",fontFamily:"'Nunito'",fontWeight:600,color:"#2D2420"}} />
+                  <button onClick={()=>doAddCmt(entry.id)} style={{padding:"8px 14px",borderRadius:14,border:"none",fontSize:12,fontFamily:"'Nunito'",fontWeight:800,cursor:"pointer",background:(cmtText[entry.id]||"").trim()?"#C0392B":"#F5F0EB",color:(cmtText[entry.id]||"").trim()?"#FFF":"#C8C0B8"}}>Post</button>
+                </div>
+              </div>}
+            </div>
+          })}
+        </div>
+      </div>}
+
+      {/* COLLECTION */}
+      {tab==="collection" && <div style={{padding:"12px 16px"}}>
+        <h2 style={{fontFamily:"'Nunito'",fontSize:18,fontWeight:900,color:"#2D2420",margin:"0 0 4px"}}>My Cellar</h2>
+        <p style={{fontFamily:"'Nunito'",fontSize:12,color:"#A09890",fontWeight:600,margin:"0 0 14px"}}>{myActive.length} bottle{myActive.length!==1?"s":""} ready</p>
+        {myActive.length===0&&myEmpty.length===0&&<div style={{textAlign:"center",padding:"48px 20px"}}><p style={{fontSize:40,marginBottom:8}}>🗄️</p><p style={{fontFamily:"'Nunito'",fontSize:15,color:"#C8C0B8",fontWeight:700}}>Your cellar is empty</p></div>}
+        {myActive.map(b=>(<div key={b.id} style={{background:"#FFF",borderRadius:18,padding:"14px 16px",marginBottom:8,boxShadow:"0 2px 10px rgba(0,0,0,0.04)",border:"1px solid #F5F0EB",display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:44,height:44,borderRadius:14,background:gt(b.type).bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>{gt(b.type).emoji}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <p style={{margin:0,fontSize:15,fontFamily:"'Nunito'",fontWeight:800,color:"#2D2420",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}{b.vintage?<span style={{color:"#B8B0A8",fontWeight:600}}>{" '"+b.vintage.slice(-2)}</span>:""}</p>
+            <div style={{display:"flex",gap:6,alignItems:"center",marginTop:2}}>
+              {b.producer&&<span style={{fontSize:11,color:"#8A8078",fontFamily:"'Nunito'",fontWeight:600}}>{b.producer}</span>}
+              <span style={{fontSize:10,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:700}}>{b.remaining}/{b.total}</span>
+            </div>
+          </div>
+          <button onClick={()=>{setShowOpen(b);setONotes("");setORating(0)}} style={{padding:"10px 16px",borderRadius:14,border:"none",fontSize:12,fontFamily:"'Nunito'",fontWeight:800,cursor:"pointer",background:"linear-gradient(135deg,#C0392B,#E74C3C)",color:"#FFF",whiteSpace:"nowrap"}}>Open 🍷</button>
+        </div>))}
+        {myEmpty.length>0&&<div>
+          <p style={{fontFamily:"'Nunito'",fontSize:12,color:"#C8C0B8",fontWeight:700,margin:"20px 0 8px",letterSpacing:1}}>FINISHED</p>
+          {myEmpty.map(b=>(<div key={b.id} style={{background:"#FAFAFA",borderRadius:14,padding:"10px 14px",marginBottom:6,display:"flex",alignItems:"center",gap:10,opacity:0.5}}><span style={{fontSize:16}}>{gt(b.type).emoji}</span><span style={{fontSize:13,fontFamily:"'Nunito'",fontWeight:700,color:"#A09890"}}>{b.name}</span><span style={{fontSize:10,fontFamily:"'Nunito'",fontWeight:600,color:"#C8C0B8",marginLeft:"auto"}}>0/{b.total}</span></div>))}
+        </div>}
+      </div>}
+
+      {/* CALENDAR */}
+      {tab==="calendar" && <div style={{padding:"12px 16px"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+          <button onClick={()=>setCurDate(new Date(yr,mo-1,1))} style={{width:32,height:32,borderRadius:10,border:"1px solid #F0EBE6",background:"#FFF",color:"#8A8078",fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>{"<"}</button>
+          <h2 style={{fontFamily:"'Nunito'",fontSize:17,fontWeight:900,color:"#2D2420",margin:0}}>{MONTHS[mo]} {yr}</h2>
+          <button onClick={()=>setCurDate(new Date(yr,mo+1,1))} style={{width:32,height:32,borderRadius:10,border:"1px solid #F0EBE6",background:"#FFF",color:"#8A8078",fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>{">"}</button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
+          {DL.map((d,i)=>(<div key={i} style={{textAlign:"center",fontSize:10,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,padding:"2px 0"}}>{d}</div>))}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}}>
+          {cDays.map((day,i)=>{
+            const items=dItems(day); const isT=day&&now.getDate()===day&&now.getMonth()===mo&&now.getFullYear()===yr; const isSel=day&&selDay===day
+            return <div key={i} onClick={()=>day&&setSelDay(day===selDay?null:day)} style={{aspectRatio:"1",borderRadius:12,background:isSel?"#C0392B10":day?"#FAFAFA":"transparent",border:isT?"2px solid #C0392B":"2px solid transparent",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:day?"pointer":"default",gap:2}}>
+              {day&&<span style={{fontSize:12,fontFamily:"'Nunito'",fontWeight:isT||items.length?800:500,color:isT?"#C0392B":items.length?"#2D2420":"#D5D0CB"}}>{day}</span>}
+              {day&&items.length>0&&<div style={{display:"flex",gap:2}}>{items.slice(0,3).map((e,j)=>(<div key={j} style={{width:5,height:5,borderRadius:e.kind==="drink"?"50%":2,background:e.kind==="drink"?gt(e.type).color:"#D4AC0D"}} />))}</div>}
+            </div>
+          })}
+        </div>
+        {selDay&&dItems(selDay).length>0&&<div style={{marginTop:14}}>
+          <p style={{fontFamily:"'Nunito'",fontSize:13,color:"#A09890",fontWeight:700,margin:"0 0 8px"}}>{MONTHS[mo]} {selDay}</p>
+          {dItems(selDay).map(e=>(<div key={e.id} onClick={()=>setShowDetail(e)} style={{background:"#FFF",borderRadius:14,padding:"10px 14px",marginBottom:6,cursor:"pointer",display:"flex",alignItems:"center",gap:10,boxShadow:"0 1px 6px rgba(0,0,0,0.04)",border:"1px solid #F5F0EB"}}><Av user={users[e.userId]} sz={24} showName={false} /><div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:14,fontFamily:"'Nunito'",fontWeight:800,color:"#2D2420",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.name}</p></div><span style={{fontSize:10,color:gt(e.type).color,fontWeight:800}}>{e.kind==="drink"?"🍷":"🛒"}</span></div>))}
+        </div>}
+      </div>}
+
+      {/* STATS */}
+      {tab==="stats" && <div style={{padding:"12px 16px"}}>
+        <Tabs tabs={[{key:"week",label:"Week"},{key:"month",label:"Month"},{key:"year",label:"Year"},{key:"all",label:"All"}]} active={statsR} onChange={setStatsR} />
+        {(()=>{
+          const myE=entries.filter(e=>e.userId===(user&&user.id)); const nd=new Date()
+          let filt=myE.filter(e=>e.kind==="purchase")
+          if(statsR==="week"){const w=new Date(nd);w.setDate(w.getDate()-7);filt=filt.filter(p=>new Date(p.date+"T12:00:00")>=w)}
+          else if(statsR==="month") filt=filt.filter(p=>{const d=new Date(p.date+"T12:00:00");return d.getMonth()===nd.getMonth()&&d.getFullYear()===nd.getFullYear()})
+          else if(statsR==="year") filt=filt.filter(p=>new Date(p.date+"T12:00:00").getFullYear()===nd.getFullYear())
+          const spent=filt.reduce((s,p)=>s+(p.price||0)*(p.quantity||1),0)
+          const btls=filt.reduce((s,p)=>s+(p.quantity||1),0)
+          const drk=myE.filter(e=>e.kind==="drink").length
+          const byT={}; filt.forEach(p=>{byT[p.type]=(byT[p.type]||0)+(p.quantity||1)}); const mx=Math.max(...Object.values(byT),1)
+          return <div style={{marginTop:14}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:14}}>
+              {[["Spent",fp(spent),"#C0392B"],["Bought",btls,"#D4AC0D"],["Drunk",drk,"#7D3C98"]].map(x=>(<div key={x[0]} style={{background:"#FFF",borderRadius:16,padding:14,textAlign:"center",boxShadow:"0 2px 10px rgba(0,0,0,0.04)",border:"1px solid #F5F0EB"}}><p style={{fontSize:9,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1.5,margin:"0 0 4px"}}>{x[0]}</p><p style={{fontSize:22,color:x[2],fontFamily:"'Nunito'",fontWeight:900,margin:0}}>{x[1]}</p></div>))}
+            </div>
+            {Object.keys(byT).length>0&&<div style={{background:"#FFF",borderRadius:16,padding:14,marginBottom:10,border:"1px solid #F5F0EB"}}>
+              <p style={{fontSize:10,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1,margin:"0 0 10px"}}>BY TYPE</p>
+              {Object.entries(byT).sort((a,b)=>b[1]-a[1]).map(p=>(<div key={p[0]} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontSize:14}}>{gt(p[0]).emoji}</span><div style={{flex:1,height:8,borderRadius:4,background:"#F5F0EB",overflow:"hidden"}}><div style={{width:(p[1]/mx*100)+"%",height:"100%",borderRadius:4,background:gt(p[0]).color}} /></div><span style={{fontSize:12,color:"#2D2420",fontFamily:"'Nunito'",fontWeight:800,minWidth:20,textAlign:"right"}}>{p[1]}</span></div>))}
+            </div>}
+            {Object.keys(users).length>1&&<div style={{background:"#FFF",borderRadius:16,padding:14,border:"1px solid #F5F0EB"}}>
+              <p style={{fontSize:10,color:"#B8B0A8",fontFamily:"'Nunito'",fontWeight:800,letterSpacing:1,margin:"0 0 10px"}}>LEADERBOARD 🏆</p>
+              {Object.values(users).map(u=>{const ud=entries.filter(e=>e.userId===u.id&&e.kind==="drink").length;const ub=entries.filter(e=>e.userId===u.id&&e.kind==="purchase").reduce((s,p)=>s+(p.quantity||1),0);return{...u,ud,ub,tot:ud+ub}}).sort((a,b)=>b.tot-a.tot).map((u,i)=>(
+                <div key={u.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                  <span style={{fontSize:14,fontFamily:"'Nunito'",fontWeight:900,color:i===0?"#C0392B":i===1?"#D4AC0D":"#B8B0A8",width:18}}>{i+1}</span>
+                  <Av user={u} sz={26} /><div style={{marginLeft:"auto",display:"flex",gap:8}}><span style={{fontSize:11,color:"#A09890",fontFamily:"'Nunito'",fontWeight:700}}>🍷{u.ud}</span><span style={{fontSize:11,color:"#A09890",fontFamily:"'Nunito'",fontWeight:700}}>🛒{u.ub}</span></div>
+                </div>
+              ))}
+            </div>}
+          </div>
+        })()}
+      </div>}
+
+      </div>
+
+      {/* MODALS */}
+      <Modal open={showDrink} onClose={()=>setShowDrink(false)}>
+        <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"0 0 12px"}}>Log a Drink 🍷</h3>
+        <SmartBar onResult={aiH(setDF)} placeholder="Sassicaia 2018" loading={aiLoad} setLoading={setAiLoad} />
+        {aiErr&&<p style={{color:"#E74C3C",fontSize:11,margin:"6px 0",fontFamily:"'Nunito'",fontWeight:600}}>{aiErr}</p>}
+        <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:8}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}><div><label style={fl}>Name *</label><input value={dF.name} onChange={e=>setDF(f=>({...f,name:e.target.value}))} style={fi} /></div><div><label style={fl}>Vintage</label><input value={dF.vintage} onChange={e=>setDF(f=>({...f,vintage:e.target.value}))} style={fi} /></div></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}><div><label style={fl}>Producer</label><input value={dF.producer} onChange={e=>setDF(f=>({...f,producer:e.target.value}))} style={fi} /></div><div><label style={fl}>Region</label><input value={dF.region} onChange={e=>setDF(f=>({...f,region:e.target.value}))} style={fi} /></div></div>
+          <div><label style={fl}>Type</label><TypePills value={dF.type} onChange={v=>setDF(f=>({...f,type:v}))} /></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,alignItems:"end"}}><div><label style={fl}>Date</label><input type="date" value={dF.date} onChange={e=>setDF(f=>({...f,date:e.target.value}))} style={fi} /></div><div><label style={fl}>Rating</label><Stars rating={dF.rating} onRate={r=>setDF(f=>({...f,rating:r}))} size={22} /></div></div>
+          <textarea placeholder="Tasting notes..." value={dF.notes} onChange={e=>setDF(f=>({...f,notes:e.target.value}))} rows={2} style={{...fi,resize:"vertical"}} />
+          <button onClick={subDrink} disabled={!dF.name.trim()} style={{...bBtn,background:dF.name.trim()?"linear-gradient(135deg,#C0392B,#E74C3C)":"#F5F0EB",color:dF.name.trim()?"#FFF":"#C8C0B8"}}>Log Drink 🍷</button>
+        </div>
+      </Modal>
+
+      <Modal open={showBuy} onClose={()=>setShowBuy(false)}>
+        <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"0 0 12px"}}>Log a Purchase 🛒</h3>
+        <SmartBar onResult={aiH(setPF)} placeholder="Barolo Conterno 2016" loading={aiLoad} setLoading={setAiLoad} />
+        {aiErr&&<p style={{color:"#E74C3C",fontSize:11,margin:"6px 0",fontFamily:"'Nunito'",fontWeight:600}}>{aiErr}</p>}
+        <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:8}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}><div><label style={fl}>Name *</label><input value={pF.name} onChange={e=>setPF(f=>({...f,name:e.target.value}))} style={fi} /></div><div><label style={fl}>Vintage</label><input value={pF.vintage} onChange={e=>setPF(f=>({...f,vintage:e.target.value}))} style={fi} /></div></div>
+          <div><label style={fl}>Producer</label><input value={pF.producer} onChange={e=>setPF(f=>({...f,producer:e.target.value}))} style={fi} /></div>
+          <div><label style={fl}>Type</label><TypePills value={pF.type} onChange={v=>setPF(f=>({...f,type:v}))} /></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}><div><label style={fl}>Price</label><input type="number" step="0.01" value={pF.price} onChange={e=>setPF(f=>({...f,price:e.target.value}))} style={fi} /></div><div><label style={fl}>Qty</label><input type="number" min="1" value={pF.quantity} onChange={e=>setPF(f=>({...f,quantity:e.target.value}))} style={fi} /></div><div><label style={fl}>Store</label><input value={pF.store} onChange={e=>setPF(f=>({...f,store:e.target.value}))} style={fi} /></div></div>
+          <div><label style={fl}>Date</label><input type="date" value={pF.date} onChange={e=>setPF(f=>({...f,date:e.target.value}))} style={fi} /></div>
+          <button onClick={subBuy} disabled={!pF.name.trim()} style={{...bBtn,background:pF.name.trim()?"linear-gradient(135deg,#D4AC0D,#F1C40F)":"#F5F0EB",color:pF.name.trim()?"#FFF":"#C8C0B8"}}>Log Purchase 🛒</button>
+        </div>
+      </Modal>
+
+      <Modal open={showImport} onClose={()=>setShowImport(false)}>
+        <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"0 0 12px"}}>Import Purchases 📸</h3>
+        <div onPaste={handlePaste} tabIndex={0} style={{width:"100%",padding:pastImg?"8px":"20px 16px",borderRadius:16,border:pastImg?"2px solid #C0392B30":"2px dashed #E5E0DA",background:"#F5F0EB",textAlign:"center",marginBottom:10,outline:"none",cursor:"pointer"}}>
+          {pastImg ? <div style={{position:"relative"}}><img src={pastImg.preview} alt="Receipt" style={{width:"100%",borderRadius:12,maxHeight:180,objectFit:"contain"}} /><button onClick={ev=>{ev.stopPropagation();setPastImg(null);setParsed([])}} style={{position:"absolute",top:6,right:6,width:24,height:24,borderRadius:"50%",border:"none",background:"rgba(0,0,0,0.5)",color:"#FFF",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>x</button></div>
+          : <span style={{color:"#A09890",fontFamily:"'Nunito'",fontSize:13,fontWeight:600}}>Click here and paste a screenshot (Ctrl+V)</span>}
+        </div>
+        {pastImg&&parsed.length===0&&<button onClick={parseImg} disabled={proc} style={{...bBtn,marginBottom:10,background:proc?"#F5F0EB":"linear-gradient(135deg,#7D3C98,#9B59B6)",color:proc?"#C8C0B8":"#FFF"}}>{proc?"Analyzing...":"Parse Image"}</button>}
+        {!pastImg&&<div>
+          <div style={{display:"flex",alignItems:"center",gap:8,margin:"2px 0 10px"}}><div style={{flex:1,height:1,background:"#E5E0DA"}} /><span style={{fontSize:11,color:"#C8C0B8",fontFamily:"'Nunito'",fontWeight:700}}>or type/paste text</span><div style={{flex:1,height:1,background:"#E5E0DA"}} /></div>
+          <textarea value={bulkText} onChange={e=>setBulkText(e.target.value)} rows={3} placeholder={"2x Opus One 2019 - $350\nMargaux 2005 - $890"} style={{...fi,resize:"vertical",fontSize:13,lineHeight:1.5,marginBottom:8}} />
+          <button onClick={parseTxt} disabled={proc||!bulkText.trim()} style={{...bBtn,background:bulkText.trim()&&!proc?"linear-gradient(135deg,#7D3C98,#9B59B6)":"#F5F0EB",color:bulkText.trim()&&!proc?"#FFF":"#C8C0B8"}}>{proc?"Parsing...":"Parse Text"}</button>
+        </div>}
+        {aiErr&&<p style={{color:"#E74C3C",fontSize:11,margin:"8px 0",fontFamily:"'Nunito'",fontWeight:600}}>{aiErr}</p>}
+        {parsed.length>0&&<div style={{marginTop:10}}>
+          <p style={{fontSize:12,color:"#A09890",fontFamily:"'Nunito'",fontWeight:700,marginBottom:6}}>{parsed.length} items found</p>
+          {parsed.map((it,idx)=>(<div key={idx} onClick={()=>{const n=[...parsed];n[idx]={...n[idx],selected:!n[idx].selected};setParsed(n)}} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:it.selected?"#FFF":"#FAFAFA",borderRadius:12,marginBottom:4,cursor:"pointer",opacity:it.selected?1:0.4,border:"1px solid "+(it.selected?"#F5F0EB":"transparent")}}>
+            <div style={{width:20,height:20,borderRadius:6,border:"2px solid "+(it.selected?"#C0392B":"#D5D0CB"),display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#C0392B",background:it.selected?"#C0392B10":"transparent"}}>{it.selected?"\u2713":""}</div>
+            <div style={{flex:1}}><p style={{margin:0,fontSize:14,color:"#2D2420",fontFamily:"'Nunito'",fontWeight:800}}>{it.name}</p></div>
+            {it.price&&<span style={{fontSize:13,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:800}}>{fp(it.price)}</span>}
+          </div>))}
+          <button onClick={doImport} disabled={!parsed.some(i=>i.selected)} style={{...bBtn,marginTop:8,background:"linear-gradient(135deg,#C0392B,#E74C3C)",color:"#FFF"}}>Import {parsed.filter(i=>i.selected).length} to Cellar 🗄️</button>
+        </div>}
+      </Modal>
+
+      <Modal open={!!showOpen} onClose={()=>setShowOpen(null)}>
+        {showOpen&&<div style={{textAlign:"center"}}>
+          <span style={{fontSize:48}}>{gt(showOpen.type).emoji}</span>
+          <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"8px 0 2px"}}>{showOpen.name}</h3>
+          {showOpen.producer&&<p style={{fontSize:13,color:"#8A8078",fontFamily:"'Nunito'",fontWeight:600,margin:0}}>{showOpen.producer}</p>}
+          <p style={{fontSize:11,color:"#C8C0B8",fontFamily:"'Nunito'",fontWeight:700,margin:"6px 0 12px"}}>{showOpen.remaining} of {showOpen.total} remaining</p>
+          <div style={{textAlign:"left"}}><label style={fl}>Rating</label></div>
+          <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><Stars rating={oRating} onRate={setORating} size={28} /></div>
+          <textarea placeholder="Quick tasting notes..." value={oNotes} onChange={e=>setONotes(e.target.value)} rows={2} style={{...fi,resize:"vertical",marginBottom:10}} />
+          <button onClick={doOpenBottle} style={{...bBtn,background:"linear-gradient(135deg,#C0392B,#E74C3C)",color:"#FFF"}}>Open Bottle 🍷</button>
+        </div>}
+      </Modal>
+
+      <Modal open={!!showDetail} onClose={()=>setShowDetail(null)}>
+        {showDetail&&(()=>{
+          const eu=users[showDetail.userId]; const isDrink=showDetail.kind==="drink"; const own=showDetail.userId===(user&&user.id)
+          return <div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}><Av user={eu} sz={26} /><span style={{fontSize:11,color:gt(showDetail.type).color,fontFamily:"'Nunito'",fontWeight:800,background:gt(showDetail.type).bg,padding:"4px 10px",borderRadius:20}}>{gt(showDetail.type).emoji} {showDetail.type}</span></div>
+            <h3 style={{fontFamily:"'Nunito'",fontSize:20,fontWeight:900,color:"#2D2420",margin:"4px 0"}}>{showDetail.name}</h3>
+            {showDetail.producer&&<p style={{margin:"4px 0",fontSize:13,color:"#8A8078",fontFamily:"'Nunito'",fontWeight:600}}>{showDetail.producer}</p>}
+            {isDrink&&showDetail.rating>0&&<div style={{marginBottom:6}}><Stars rating={showDetail.rating} size={16} /></div>}
+            {isDrink&&showDetail.notes&&<p style={{fontSize:13,color:"#6D6259",fontFamily:"'Nunito'",fontWeight:500,lineHeight:1.5,margin:"0 0 8px"}}>{showDetail.notes}</p>}
+            {!isDrink&&showDetail.price!=null&&<p style={{fontSize:18,color:"#C0392B",fontFamily:"'Nunito'",fontWeight:900,margin:"6px 0"}}>{fp(showDetail.price)}</p>}
+            <div style={{display:"flex",gap:6,marginTop:8}}>
+              <button onClick={()=>setShowDetail(null)} style={{...bBtn,flex:1,background:"#F5F0EB",color:"#8A8078"}}>Close</button>
+              {own&&<button onClick={()=>doDelete(showDetail.id)} style={{...bBtn,flex:1,background:"#FFF",color:"#C0392B",border:"2px solid #C0392B30"}}>Delete</button>}
+            </div>
+          </div>
+        })()}
+      </Modal>
+    </div>
+  )
+}
